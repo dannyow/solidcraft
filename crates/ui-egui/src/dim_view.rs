@@ -872,6 +872,36 @@ mod tests {
         }
     }
 
+    /// Typing `rad` into a new dimension's value lists `radius` although `rad` is itself the
+    /// radians unit; the popup is unarmed, so Down then Enter completes the name and the
+    /// dimension takes it (#3663).
+    #[test]
+    fn a_name_that_extends_a_unit_is_offered_and_completes() {
+        cancel();
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("parameters.add", json!({"name":"radius","expression":"10 mm"})).unwrap();
+        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        h.app.run("sketch.line", json!({"points":[[10,10],[40,10]],"infer":false})).unwrap();
+        h.call("ui.view", json!({"view":"top"}));
+        h.step(&json!({"start":"sketch.dimension"})).unwrap();
+        h.step(&json!({"click":{"sketch":[25,10]}})).unwrap();
+        assert!(editing(), "{:?}", h.app.status);
+        h.step(&json!({"text":"rad"})).unwrap();
+        h.frames(2);
+        assert!(crate::params_dialog::suggestions(&h.ctx, "rad").iter().any(|s| s.text == "radius"));
+        assert_eq!(crate::expression_complete::popup_state(&h.ctx), Some((1, true)), "a unit with no number before it is a prefix: armed");
+        h.step(&json!({"key":"Enter"})).unwrap();
+        assert!(editing(), "Enter completed the name, the editor stays open: {:?}", h.app.status);
+        assert_eq!(EDIT.with(|e| e.borrow().as_ref().map(|e| e.expr.clone())), Some("radius".to_string()));
+        h.step(&json!({"key":"Enter"})).unwrap();
+        assert!(!editing(), "{:?}", h.app.status);
+        let sk = h.app.session.doc.sketch(h.app.session.active_sketch.unwrap()).unwrap();
+        let dim = sk.constraints.iter().find_map(|c| c.param.as_deref()).expect("the dimension was added");
+        assert_eq!(h.app.session.doc.param(dim).map(|p| p.expr.as_str()), Some("radius"));
+        h.step(&json!({"key":"Escape"})).unwrap();
+        cancel();
+    }
+
     #[test]
     fn placement_previews_radial_and_angular_dimensions_and_invalidates_on_document_change() {
         cancel();

@@ -2394,5 +2394,6 @@
   "update.up_to_date": "SolidCraft は最新です。",
   "update.update_now": "今すぐ更新",
   "update.you_have": "現在のバージョンは {version} です。",
-  "↑ ↓ choose · Enter / Tab complete · Esc dismiss": "↑ ↓ 選択 · Enter / Tab 補完 · Esc 閉じる"
+  "↑ ↓ choose · Enter / Tab complete · Esc dismiss": "↑ ↓ 選択 · Enter / Tab 補完 · Esc 閉じる",
+  "↑ ↓ choose · Enter applies what you typed · Esc dismiss": "↑ ↓ 選択 · Enter 入力どおりに適用 · Esc 閉じる"
 }

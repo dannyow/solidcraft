@@ -2394,5 +2394,6 @@
   "update.up_to_date": "SolidCraft is up to date.",
   "update.update_now": "Update now",
   "update.you_have": "You have {version}.",
-  "↑ ↓ choose · Enter / Tab complete · Esc dismiss": "↑ ↓ choose · Enter / Tab complete · Esc dismiss"
+  "↑ ↓ choose · Enter / Tab complete · Esc dismiss": "↑ ↓ choose · Enter / Tab complete · Esc dismiss",
+  "↑ ↓ choose · Enter applies what you typed · Esc dismiss": "↑ ↓ choose · Enter applies what you typed · Esc dismiss"
 }

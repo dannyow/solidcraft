@@ -752,17 +752,31 @@ pub(crate) fn suggestions_for(ctx: &egui::Context, word: &str, explicit: bool) -
         return Vec::new();
     }
     let all = ctx.data(|d| d.get_temp::<Cache>(cache_id())).map(|c| c.all).unwrap_or_default();
-    // A complete token is ready to submit, even when longer names share its prefix.
-    if !explicit && all.iter().any(|s| s.text == word) {
-        return Vec::new();
-    }
+    // A complete token stays out of its own list; longer names that start with it are still
+    // offered (passively: see `expression_complete`, #3663), but only those: `in` lists `inner`,
+    // not every name with `in` somewhere in it. A typed unit is complete in every sense, so only
+    // parameters, functions and constants extend it: `in` does not offer `inch`.
+    let exact = !explicit && all.iter().any(|s| s.text == word);
     let w = word.to_ascii_lowercase();
-    let offered = |s: &&Suggestion| explicit || s.text.trim_end_matches('(') != word;
+    let offered = |s: &&Suggestion| (explicit || s.text.trim_end_matches('(') != word) && !(exact && s.kind == "unit");
     let starts = |s: &&Suggestion| s.text.to_ascii_lowercase().starts_with(&w);
     // A parameter is also offered for a word anywhere in its name (`side` finds
     // `cab_side_thickness`, #2757), after the names that start with it.
-    let within = |s: &&Suggestion| s.kind == "parameter" && !starts(s) && s.text.to_ascii_lowercase().contains(&w);
+    let within = |s: &&Suggestion| !exact && s.kind == "parameter" && !starts(s) && s.text.to_ascii_lowercase().contains(&w);
     all.iter().filter(|s| starts(s) && offered(s)).chain(all.iter().filter(|s| within(s) && offered(s))).take(8).cloned().collect()
+}
+
+/// Is `word` itself one of the known tokens (a parameter or dimension name, a constant or a
+/// unit)? Such a word is ready to submit as typed; the popup then only offers longer names.
+pub(crate) fn exact_token(ctx: &egui::Context, word: &str) -> bool {
+    let all = ctx.data(|d| d.get_temp::<Cache>(cache_id())).map(|c| c.all).unwrap_or_default();
+    all.iter().any(|s| s.text == word)
+}
+
+/// Is `word` a unit (`mm`, `in`, `deg`, ...)?
+pub(crate) fn unit_token(ctx: &egui::Context, word: &str) -> bool {
+    let all = ctx.data(|d| d.get_temp::<Cache>(cache_id())).map(|c| c.all).unwrap_or_default();
+    all.iter().any(|s| s.kind == "unit" && s.text == word)
 }
 
 /// Offer keyboard and pointer completions under a focused expression box.
@@ -977,9 +991,26 @@ mod tests {
         let ctx = crate::fonts::test_context();
         let mut app = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         let _ = app.run("parameters.add", json!({"name": "width", "expression": "40 mm"}));
+        let _ = app.run("parameters.add", json!({"name": "radius", "expression": "10 mm"}));
+        let _ = app.run("parameters.add", json!({"name": "rounding", "expression": "3 mm"}));
         publish(&mut app, &ctx);
         let s = suggestions(&ctx, "wi");
         assert_eq!(s.first().map(|x| x.text.as_str()), Some("width"));
+        // A name that extends a unit is still offered at the unit's own prefix (#3663); the
+        // prefix itself is a complete token, so the caller knows Enter should submit it.
+        assert!(suggestions(&ctx, "rad").iter().any(|x| x.text == "radius"));
+        assert!(!suggestions(&ctx, "rad").iter().any(|x| x.text == "rad"));
+        // A typed unit is not extended by other units: `in` offers no `inch` (a popup there sat
+        // over dialog buttons); a prefix that is not itself a unit still does. A complete token
+        // is extended only by names that start with it: `in` does not list `rounding` (a fillet
+        // dialog opening on `2 in` showed it over the OK button), while `und` still does (#2757).
+        assert!(suggestions(&ctx, "in").is_empty() && suggestions(&ctx, "mm").is_empty());
+        assert!(suggestions(&ctx, "und").iter().any(|x| x.text == "rounding"));
+        assert!(unit_token(&ctx, "in") && unit_token(&ctx, "rad") && !unit_token(&ctx, "radius") && !unit_token(&ctx, "i"));
+        let m: Vec<String> = suggestions(&ctx, "m").into_iter().map(|x| x.kind).collect();
+        assert!(!m.is_empty() && m.iter().all(|k| k == "function"), "{m:?}");
+        assert!(suggestions(&ctx, "i").iter().any(|x| x.text == "inch"));
+        assert!(exact_token(&ctx, "rad") && exact_token(&ctx, "width") && !exact_token(&ctx, "radi") && !exact_token(&ctx, "wi"));
         assert!(suggestions(&ctx, "ata").iter().any(|x| x.text == "atan2("));
         assert!(suggestions(&ctx, "1").is_empty());
         // The dialog's rows come from the engine.

@@ -171,6 +171,7 @@ mod primitive_units_tests;
 pub mod recovery_ui;
 pub mod ref_images;
 pub mod render_workspace;
+pub(crate) mod rest_gizmo;
 #[cfg(test)]
 mod revolve_edit_tests;
 #[cfg(test)]

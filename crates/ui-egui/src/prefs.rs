@@ -531,6 +531,9 @@ preference_settings! {
     up_axis: String = "z".into(), PAGE_DESIGN;
     /// After a STEP or IGES file opens, offer to stand a Y-up part up (`stand_up`).
     offer_stand_up: bool = true, PAGE_DESIGN => check("Offer to stand up Y-up files", "After a STEP or IGES file opens with Z up, offer a quarter turn about X");
+    /// Spike: handles on a Rest's preview that drag it across the model and turn a rectangular
+    /// pad (`rest_gizmo`). Off by default: a Rest is then placed by its click only, as before.
+    rest_gizmo: bool = false, PAGE_DESIGN => check("Rest handles (spike)", "Handles on a Rest's preview: drag the marker to move it across the model, turn a rectangular pad by its knob");
     /// What a middle-button double-click in the view does: `home`, `fit` or `off`.
     middle_double_click: String = "home".into(), PAGE_NAVIGATION;
     /// Colour vision mode (#778): `off`, `protan`, `deutan` or `tritan`.

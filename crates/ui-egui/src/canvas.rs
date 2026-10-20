@@ -333,6 +333,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
     {
         draw(app, ui, painter, proj, &mut d, base, bs, dir);
     }
+    crate::rest_gizmo::show(app, ui, painter, proj, &mut d);
     app.dialog = Some(d);
 }
 
@@ -1319,7 +1320,7 @@ fn rotation_handle(
 
 /// An edge-on ring has two equally valid depths; retain the branch nearest the current handle.
 #[allow(clippy::too_many_arguments)]
-fn projected_rotation_angle(
+pub(crate) fn projected_rotation_angle(
     proj: &Proj,
     pointer: Pos2,
     centre: Vec3,

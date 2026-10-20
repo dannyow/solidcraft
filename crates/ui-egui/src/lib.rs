@@ -173,6 +173,8 @@ pub mod ref_images;
 pub mod render_workspace;
 pub(crate) mod rest_gizmo;
 #[cfg(test)]
+mod rest_gizmo_ui_tests;
+#[cfg(test)]
 mod revolve_edit_tests;
 #[cfg(test)]
 mod revolve_manipulator_tests;

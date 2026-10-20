@@ -110,6 +110,12 @@ fn snap_fit() -> Pl {
 pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
     let (pl, inputs) = match id {
         "plastic.snap_fit" => (snap_fit(), vec![SelInput::new("Position", PLANAR_FACES, false)]),
+        // With the Rest handles on (spike), the place snaps to sketch points on the face as a
+        // Single hole's does; a bare sketch point is refused by OK as before. Off: faces only.
+        "plastic.rest" if app.preferences.rest_gizmo => {
+            let (pl, _) = Pl::simple_start(id)?;
+            (pl, vec![SelInput::new("Position", PLANAR_FACES | crate::selection::POINTS, false)])
+        }
         "plastic.manage_rules" => {
             let rules = app.session.doc.plastic_rules();
             let pick = app.session.doc.plastic.active.as_ref().and_then(|a| rules.iter().position(|r| &r.name == a)).unwrap_or(0);

@@ -1,10 +1,10 @@
 //! Spike: handles that place and turn a Rest on its face (Preferences › Design › Rest handles,
 //! off by default, `rest_gizmo` through `ui.prefs`).
 //!
-//! A ball at the pad's centre drags it across the model, near-white so the blue preview it sits on
-//! does not hide it, cased in a darker edge so it also carries on a light body. Under the pointer
-//! it brightens, shows the move cursor and a tooltip. While it drags, the pad's footprint is
-//! outlined where the ball is: the solid preview is recomputed off the window thread and trails
+//! A dashed crosshair at the pad's centre drags it across the model, near-white so the blue preview
+//! it sits on does not hide it, cased in a darker edge so it also carries on a light body. Under
+//! the pointer its lines grow, shows the move cursor and a tooltip. While it drags, the pad's footprint is
+//! outlined where the marker is: the solid preview is recomputed off the window thread and trails
 //! the pointer by its boolean, the outline does not. Each frame the pointer is picked as a click into the
 //! Position input would be, sketch points and all, so the pad lands where a click would put it;
 //! the dialog's Position input follows, and so does the stored growth direction when the pad
@@ -65,6 +65,42 @@ fn ball(painter: &egui::Painter, c: Pos2, hot: bool, t: &Tokens) {
     let fill = if hot { Color32::WHITE } else { HANDLE };
     let edge = if hot { t.accent } else { EDGE };
     painter.circle(c, r, fill, Stroke::new(1.5, edge));
+}
+
+/// The move marker's look for a frame, interpolated between its three states so hover and drag
+/// ease in and out rather than snap. `hot` eases 0 (resting) to 1 (pointer over or dragging);
+/// `active` eases 0 to 1 while dragging.
+struct CrossStyle {
+    hot: f32,
+    active: f32,
+}
+
+/// The move marker: a small dot with four lines to the screen cardinals, a gap between the dot
+/// and each line, a common way to mark a point you can drag. Near-white and cased in the contrast
+/// edge, so it reads on the feature's blue preview and on a light body alike. Three states, eased:
+/// resting (quiet, short dashes), hover (brighter, longer dashes) and active while dragging (solid
+/// lines, a bigger dot with an accent edge and a soft halo, so it stays legible over the moving
+/// ghost). The dash-to-solid switch is the one step that cannot tween, so it flips at drag start.
+fn crosshair(painter: &egui::Painter, c: Pos2, s: &CrossStyle, t: &Tokens) {
+    let reach = 15.0 + 7.0 * s.hot + 2.0 * s.active;
+    let gap = 7.0;
+    let core = HANDLE.lerp_to_gamma(Color32::WHITE, s.hot);
+    let solid = s.active > 0.5;
+    if s.active > 0.01 {
+        painter.circle_filled(c, REACH + 4.0, t.accent.gamma_multiply(0.16 * s.active));
+    }
+    for d in [vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)] {
+        let (a, b) = (c + d * gap, c + d * reach);
+        if solid {
+            cased_line(painter, a, b, 1.8, core);
+        } else {
+            painter.add(egui::Shape::dashed_line(&[a, b], Stroke::new(3.5, EDGE), 3.0, 3.0));
+            painter.add(egui::Shape::dashed_line(&[a, b], Stroke::new(1.5, core), 3.0, 3.0));
+        }
+    }
+    let r = 3.0 + 0.5 * s.hot + 1.5 * s.active;
+    let edge = EDGE.lerp_to_gamma(t.accent, s.active);
+    painter.circle(c, r, core, Stroke::new(1.2 + 0.4 * s.active, edge));
 }
 
 /// Is this dialog a Rest with the handles switched on?
@@ -179,7 +215,7 @@ fn footprint(app: &SolveApp, painter: &egui::Painter, proj: &Proj, d: &Dialog, b
 
 /// Draw the handles and take their drags (after the dialog's own arrow, so the ball wins
 /// the pointer near the base).
-pub(crate) fn show(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj, d: &mut Dialog) {
+pub(crate) fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj, d: &mut Dialog) {
     if !enabled(app, d) {
         return;
     }
@@ -188,27 +224,47 @@ pub(crate) fn show(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, p
     let t = Tokens::get();
     let area = |c: Pos2| egui::Rect::from_center_size(c, vec2(2.0 * REACH, 2.0 * REACH));
 
-    // The ball that moves the pad.
+    // The crosshair that moves the pad.
     let r = ui
         .interact(area(bs), egui::Id::new("sc_rest_position"), egui::Sense::drag())
         .on_hover_text(crate::i18n::tr_label("Drag to move the rest across the model. It snaps to sketch points on the face."));
+    // Grab offset: the press lands where the finger is, not always the centre. Remember how far
+    // the press was from the centre and keep that gap for the whole drag, so the pad follows the
+    // pointer from where it was grabbed instead of jumping its centre under the first move.
+    // The press is on the handle: never let a still hold here arm Select Other (it would pop up
+    // the overlapping-pick list while you pause to think about where to drag).
+    if r.hovered() || r.is_pointer_button_down_on() {
+        crate::select_other::suppress(app);
+    }
+    let grab = egui::Id::new("sc_rest_position_grab");
+    if r.drag_started()
+        && let Some(p) = r.interact_pointer_pos()
+    {
+        ui.data_mut(|m| m.insert_temp(grab, p - bs));
+    }
     if r.dragged() {
         crate::tool_modifiers::set_manipulator_dragging(true);
         if let Some(p) = r.interact_pointer_pos() {
-            move_to(app, d, proj, p, n);
+            let off = ui.data(|m| m.get_temp::<egui::Vec2>(grab)).unwrap_or_default();
+            move_to(app, d, proj, p - off, n);
         }
     }
     // Read the frame again: a drag moved it this frame.
     let Some((base, n)) = frame(app, d) else { return };
     let Some(bs) = proj.to_screen(base) else { return };
     crate::scenario::publish_handle("rest:position", bs);
-    let hot = r.hovered() || r.dragged();
-    if r.dragged() {
+    let (hovered, dragging) = (r.hovered(), r.dragged());
+    // Ease the two state factors; animate_bool_with_time repaints only while they are moving.
+    let style = CrossStyle {
+        hot: ui.ctx().animate_bool_with_time(egui::Id::new("sc_rest_cross_hot"), hovered || dragging, 0.12),
+        active: ui.ctx().animate_bool_with_time(egui::Id::new("sc_rest_cross_active"), dragging, 0.12),
+    };
+    if dragging {
         footprint(app, painter, proj, d, base, n);
     }
-    ball(painter, bs, hot, &t);
-    if hot {
-        ui.ctx().set_cursor_icon(if r.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Move });
+    crosshair(painter, bs, &style, &t);
+    if hovered || dragging {
+        ui.ctx().set_cursor_icon(if dragging { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Move });
     }
 
     // The rotation knob: a rectangular pad only.

@@ -119,3 +119,25 @@ fn ball_wins_the_press_over_the_height_arrow_at_the_base() {
     };
     assert_eq!(height_after, height_before, "the Height arrow did not take the press");
 }
+
+/// Grabbing the marker off its centre must not jump the pad: the drag keeps the offset from the
+/// press, so the pad moves by the drag vector, not by the vector plus the off-centre grab.
+#[test]
+fn a_press_off_centre_does_not_jump_the_pad() {
+    let mut h = plate();
+    h.step(&json!({"start": "plastic.rest"})).unwrap();
+    h.step(&json!({"click": {"world": [40, 25, 10]}})).unwrap();
+    h.settle();
+    let start = h.at(&json!({"handle": "rest:position"})).unwrap();
+    // Press 14 px off centre (inside the marker's reach), then drag by a known screen vector.
+    let off = 14.0;
+    let (dx, dy) = (60.0, 30.0);
+    let from = json!([start[0] + off, start[1]]);
+    let to = json!([start[0] + off + dx, start[1] + dy]);
+    h.step(&json!({"drag": [from, to], "steps": 10})).unwrap();
+    h.settle();
+    let end = h.at(&json!({"handle": "rest:position"})).unwrap();
+    // The pad followed the drag vector. Without the grab offset it would land `off` further along.
+    assert!((end[0] - (start[0] + dx)).abs() < 6.0, "x jumped: start {start:?} end {end:?}");
+    assert!((end[1] - (start[1] + dy)).abs() < 6.0, "y jumped: start {start:?} end {end:?}");
+}

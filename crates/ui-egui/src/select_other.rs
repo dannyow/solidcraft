@@ -315,6 +315,16 @@ pub fn close(app: &mut SolveApp) {
     }
 }
 
+/// A manipulator has the press: cancel any pending or open press-and-hold, so dragging (or just
+/// pressing and thinking on) a handle never arms Select Other. The hold timer rearms on the next
+/// free press elsewhere.
+pub fn suppress(app: &mut SolveApp) {
+    app.viewport.select_other.hold = None;
+    if is_open(app) {
+        close(app);
+    }
+}
+
 pub fn is_open(app: &SolveApp) -> bool {
     app.viewport.select_other.popup.is_some()
 }

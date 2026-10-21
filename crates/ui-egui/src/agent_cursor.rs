@@ -456,7 +456,7 @@ fn finish(app: &mut SolveApp, ctx: &egui::Context) {
     // What was computed ahead while the pointer glided is found rather than computed again here.
     let out = app.run_with_kept(job.ahead.map(|a| a.kept), |app| match crate::control::handle(app, ctx, &req) {
         crate::control::Outcome::Done(v) => v,
-        crate::control::Outcome::Screenshot { .. } => json!({"ok": false, "error": "not a command"}),
+        crate::control::Outcome::Screenshot { .. } | crate::control::Outcome::ExportSvg { .. } => json!({"ok": false, "error": "not a command"}),
     });
     let ran = out.get("ok").and_then(Value::as_bool).unwrap_or(false);
     if follow && ran {

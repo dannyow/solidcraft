@@ -98,7 +98,7 @@ pub fn rect_of(name: &str) -> Option<egui::Rect> {
     RECTS.with(|h| h.borrow().iter().rfind(|(n, _)| n == name).map(|x| x.1))
 }
 
-#[cfg(test)]
+/// Every rect published this frame whose name starts with `prefix`.
 pub(crate) fn rects(prefix: &str) -> Vec<(String, egui::Rect)> {
     RECTS.with(|r| r.borrow().iter().filter(|(name, _)| name.starts_with(prefix)).cloned().collect())
 }
@@ -334,6 +334,12 @@ impl Harness {
         let out = match handle(&mut self.app, &self.ctx, &req) {
             Outcome::Done(v) => v,
             Outcome::Screenshot { .. } => json!({"ok": true, "result": null}),
+            Outcome::ExportSvg { path } => {
+                // Written at the end of the next frame, like the app does it.
+                self.app.pending_svg = Some((path, None));
+                self.frame();
+                self.app.svg_reply.take().unwrap_or_else(|| json!({"ok": false, "error": "no frame exported the SVG"}))
+            }
         };
         self.settle();
         out

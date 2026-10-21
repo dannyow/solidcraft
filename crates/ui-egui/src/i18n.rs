@@ -289,6 +289,15 @@ impl Drop for LanguageScope {
     }
 }
 
+/// The catalog id of an English message, if `text` is one (the reverse of the English catalog;
+/// messages with placeholders are left out).
+pub fn label_id(text: &str) -> Option<&'static str> {
+    static LABEL_IDS: OnceLock<BTreeMap<&'static str, &'static str>> = OnceLock::new();
+    let ids = LABEL_IDS
+        .get_or_init(|| ENGLISH.messages().iter().filter(|(_, text)| !text.contains('{')).map(|(id, text)| (text.as_str(), id.as_str())).collect());
+    ids.get(text).copied()
+}
+
 /// This thread's language, to carry into a worker thread with [`scope`].
 pub fn language() -> &'static str {
     CURRENT.with(|current| current.get().0.id)

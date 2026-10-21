@@ -276,6 +276,7 @@ pub mod tools;
 pub mod ui_kit;
 #[cfg(test)]
 mod ui_kit_guard_tests;
+pub mod ui_svg;
 pub mod update;
 mod value_step;
 mod view_confirm;
@@ -598,6 +599,10 @@ pub struct SolveApp {
     shot_chat_turns: std::collections::HashMap<u64, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     queued_shots: Vec<(u64, f64, u32)>,
     shot_token: u64,
+    /// A `ui.export_svg` waiting for the end of this frame: its path and who asked.
+    pending_svg: Option<(Option<String>, Option<std::sync::mpsc::Sender<Value>>)>,
+    /// The last export's answer when nobody waited on a channel (the headless harness).
+    pub(crate) svg_reply: Option<Value>,
     styled: bool,
     fitted: bool,
     pending_fit: Option<(Camera, solidcraft_engine::geom::Aabb3, bool)>,
@@ -742,6 +747,8 @@ impl SolveApp {
             shot_chat_turns: Default::default(),
             queued_shots: Vec::new(),
             shot_token: 0,
+            pending_svg: None,
+            svg_reply: None,
             styled: false,
             fitted: false,
             pending_fit: None,
@@ -2120,6 +2127,16 @@ impl SolveApp {
         control::publish_design(self, &control::DESIGN_WATCH);
         self.frame_ms = now_ms() - t0;
         frame_watch::end(self);
+        // Last: the frame's shapes are complete, and egui drains them when the pass ends.
+        if let Some((path, reply)) = self.pending_svg.take() {
+            let answer = ui_svg::export_live(self, ui.ctx(), path.as_deref());
+            match reply {
+                Some(reply) => {
+                    let _ = reply.send(answer);
+                }
+                None => self.svg_reply = Some(answer),
+            }
+        }
     }
 
     fn cad_ui(&mut self, ui: &mut egui::Ui, report_input: &mut Option<issue_report::CadInput>) {
@@ -2363,6 +2380,9 @@ impl SolveApp {
             // say so at once rather than after the deadline (#1677).
             control::Outcome::Screenshot { .. } if window_hidden(ctx) => {
                 let _ = reply.send(json!({"ok": false, "hidden": true, "error": "no frame was presented (window hidden?); use ui.render"}));
+            }
+            control::Outcome::ExportSvg { path } => {
+                self.pending_svg = Some((path, Some(reply)));
             }
             control::Outcome::Screenshot { path } => {
                 self.shot_token += 1;

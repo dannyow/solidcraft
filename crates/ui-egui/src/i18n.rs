@@ -117,11 +117,7 @@ impl Locale {
     /// Translate source labels from engine/UI tables, preserving unknown labels.
     /// Also accepts stable IDs while table helpers migrate away from source text.
     pub fn label(self, label: &str) -> &str {
-        static LABEL_IDS: OnceLock<BTreeMap<&'static str, &'static str>> = OnceLock::new();
-        let ids = LABEL_IDS.get_or_init(|| {
-            ENGLISH.messages().iter().filter(|(_, text)| !text.contains('{')).map(|(id, text)| (text.as_str(), id.as_str())).collect()
-        });
-        ids.get(label).map_or_else(|| self.text(label), |id| self.text(id))
+        label_id(label).map_or_else(|| self.text(label), |id| self.text(id))
     }
 
     pub fn format(self, id: &str, args: &[(&str, &str)]) -> String {
@@ -224,6 +220,15 @@ impl Drop for LanguageScope {
 }
 
 /// This thread's language, to carry into a worker thread with [`scope`].
+/// The catalog id of an English message, if `text` is one (the reverse of the English catalog;
+/// messages with placeholders are left out).
+pub fn label_id(text: &str) -> Option<&'static str> {
+    static LABEL_IDS: OnceLock<BTreeMap<&'static str, &'static str>> = OnceLock::new();
+    let ids = LABEL_IDS
+        .get_or_init(|| ENGLISH.messages().iter().filter(|(_, text)| !text.contains('{')).map(|(id, text)| (text.as_str(), id.as_str())).collect());
+    ids.get(text).copied()
+}
+
 pub fn language() -> &'static str {
     CURRENT.with(|current| current.get().0.id)
 }

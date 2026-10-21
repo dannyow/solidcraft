@@ -24,6 +24,11 @@ use crate::viewport::Hit;
 #[path = "dialogs_dense.rs"]
 mod dense;
 
+/// The command a dialog's OK runs, by its kind (`None` for dialogs that are not one command).
+pub(crate) fn command_of(kind: &Kind) -> Option<&'static str> {
+    dense::command(kind)
+}
+
 const SELECT_ONLY: &[Scope] = &[Scope::Selection, Scope::FeaturePreview];
 const SELECT_MANIP: &[Scope] = &[Scope::Selection, Scope::Manipulator, Scope::FeaturePreview];
 

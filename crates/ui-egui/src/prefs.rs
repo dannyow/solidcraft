@@ -1734,7 +1734,7 @@ fn remove_theme(app: &mut SolveApp, id: &str) -> Result<(), String> {
 }
 
 /// The theme on now as a complete theme file, a starting point for a new one.
-fn current_theme_file(app: &SolveApp) -> serde_json::Value {
+pub(crate) fn current_theme_file(app: &SolveApp) -> serde_json::Value {
     use crate::theme_files::{Base, export, find, resolve};
     match find(&app.preferences.theme, &app.preferences.custom_themes) {
         Some(f) => export(&f.name, f.base, &resolve(f)),

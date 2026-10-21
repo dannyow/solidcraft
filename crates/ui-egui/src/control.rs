@@ -69,7 +69,13 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Value),
-    Screenshot { path: Option<String> },
+    Screenshot {
+        path: Option<String>,
+    },
+    /// `ui.export_svg`: written at the end of the frame, when its shapes are complete.
+    ExportSvg {
+        path: Option<String>,
+    },
 }
 
 fn ok(v: Value) -> Outcome {
@@ -774,6 +780,10 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
             Some(Err(e)) => err(e),
             _ => Outcome::Screenshot { path: s("path").map(str::to_string) },
         },
+        "ui.export_svg" => match s("path").map(vfs::check) {
+            Some(Err(e)) => err(e),
+            _ => Outcome::ExportSvg { path: s("path").map(str::to_string) },
+        },
         "ui.render" => {
             let w = f("width").unwrap_or(1280.0).clamp(16.0, 8192.0) as u32;
             let h = f("height").unwrap_or(800.0).clamp(16.0, 8192.0) as u32;
@@ -1021,7 +1031,7 @@ mod tests {
         let (req, _rx) = ControlRequest::new("ui.render", json!({"path": path.to_string_lossy(), "width": 200, "height": 140}));
         match handle(app, &crate::fonts::test_context(), &req) {
             Outcome::Done(v) => assert_eq!(v["ok"], true, "{v}"),
-            Outcome::Screenshot { .. } => panic!("ui.render took a screenshot"),
+            Outcome::Screenshot { .. } | Outcome::ExportSvg { .. } => panic!("ui.render took a screenshot"),
         }
         std::fs::read(path).unwrap()
     }
@@ -1091,7 +1101,7 @@ mod tests {
         let (req, _rx) = ControlRequest::new("ui.render", params);
         match handle(app, &crate::fonts::test_context(), &req) {
             Outcome::Done(v) => assert_eq!(v["ok"], true, "{v}"),
-            Outcome::Screenshot { .. } => panic!("ui.render took a screenshot"),
+            Outcome::Screenshot { .. } | Outcome::ExportSvg { .. } => panic!("ui.render took a screenshot"),
         }
         std::fs::read(path).unwrap()
     }
@@ -1367,6 +1377,7 @@ mod tests {
             match handle(&mut app, &crate::fonts::test_context(), &req) {
                 Outcome::Done(v) => v,
                 Outcome::Screenshot { path } => json!({"ok": true, "screenshot": path}),
+                Outcome::ExportSvg { path } => json!({"ok": true, "svg": path}),
             }
         };
         let export = |p: String| json!({"command": "file.export", "params": {"path": p}});

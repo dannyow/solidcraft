@@ -484,7 +484,7 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
                 feature_pattern_alignment_row(ui, &mut d.extra, 0);
             }
         }
-        Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } => {
+        Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, td_apex, td_angle, td_peak, td_cap, opts } => {
             form_row(ui, "Extents", |ui| {
                 let cur = if to_object_on(&d.inputs) { 1 } else { usize::from(opts.all) * 2 };
                 let mut ext = cur;
@@ -534,6 +534,14 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
             if *kind == 2 {
                 enter |= expr_row(ui, "Countersink Ø", cs_diameter);
                 enter |= expr_row(ui, "Countersink angle", cs_angle);
+            }
+            if *kind == 3 {
+                choice_row(ui, "Apex", "hole_apex", td_apex, &crate::dialogs::APEX_LABELS);
+                enter |= expr_row(ui, "Overhang angle", td_angle);
+                choice_row(ui, "Peak", "hole_peak", td_peak, &crate::dialogs::PEAK_LABELS);
+                if *td_peak == 1 {
+                    enter |= expr_row(ui, "Cap height", td_cap);
+                }
             }
         }
         _ => enter |= additional_rows(app, d, ui),

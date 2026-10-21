@@ -93,3 +93,29 @@ fn knob_turns_a_rectangular_rest_from_edit_feature() {
     assert!(along.0.x.abs() > 0.99, "the feature keeps the turn: {:?}", along.0);
     h.step(&json!({"expect": {"errors": 0, "bodies": 1}})).unwrap();
 }
+
+/// Seen from the home view, the Height arrow's stem starts at the pad's centre, where the ball
+/// sits. A press there belongs to the ball: the pad moves, the height stays.
+#[test]
+fn ball_wins_the_press_over_the_height_arrow_at_the_base() {
+    let mut h = Harness::new();
+    h.app.ui.show_origin = false;
+    h.app.preferences.rest_gizmo = true;
+    h.app.run("solid.box", json!({"length": 80, "width": 50, "height": 10})).unwrap();
+    h.settle();
+    h.step(&json!({"start": "plastic.rest"})).unwrap();
+    h.step(&json!({"click": {"world": [20, 15, 10]}})).unwrap();
+    h.settle();
+    let height_before = match &h.app.dialog.as_ref().expect("a dialog").kind {
+        crate::dialogs::Kind::Plastic(crate::dialogs_plastic::Pl::Rest { height, .. }) => height.clone(),
+        other => panic!("a Rest dialog, not {other:?}"),
+    };
+    // Up and to the right on screen, the way the arrow points in the home view.
+    drag_handle(&mut h, "rest:position", json!({"world": [45, 35, 10]}));
+    assert!(position(&h).dist(Vec3::new(45.0, 35.0, 10.0)) < 0.5, "the pad moved: {:?}", position(&h));
+    let height_after = match &h.app.dialog.as_ref().expect("a dialog").kind {
+        crate::dialogs::Kind::Plastic(crate::dialogs_plastic::Pl::Rest { height, .. }) => height.clone(),
+        other => panic!("a Rest dialog, not {other:?}"),
+    };
+    assert_eq!(height_after, height_before, "the Height arrow did not take the press");
+}

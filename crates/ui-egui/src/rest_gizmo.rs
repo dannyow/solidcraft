@@ -1,10 +1,14 @@
 //! Spike: handles that place and turn a Rest on its face (Preferences › Design › Rest handles,
 //! off by default, `rest_gizmo` through `ui.prefs`).
 //!
-//! A ball at the pad's centre drags it across the model. Each frame the pointer is picked as a
-//! click into the Position input would be, sketch points and all, so the pad lands where a click
-//! would put it; the dialog's Position input follows, and so does the stored growth direction
-//! when the pad crosses onto another face. A rectangular pad also gets a knob past the end of
+//! A ball at the pad's centre drags it across the model, near-white so the blue preview it sits on
+//! does not hide it, cased in a darker edge so it also carries on a light body. Under the pointer
+//! it brightens, shows the move cursor and a tooltip. While it drags, the pad's footprint is
+//! outlined where the ball is: the solid preview is recomputed off the window thread and trails
+//! the pointer by its boolean, the outline does not. Each frame the pointer is picked as a click into the
+//! Position input would be, sketch points and all, so the pad lands where a click would put it;
+//! the dialog's Position input follows, and so does the stored growth direction when the pad
+//! crosses onto another face. A rectangular pad also gets a knob past the end of
 //! its length: dragging it turns the pad about the face normal in 5° steps (Alt or Ctrl held:
 //! free), kept as the command's `along`. Nothing runs until OK: the handles edit the open
 //! dialog, which the live preview follows, so a new Rest and an Edit Feature behave alike.
@@ -25,12 +29,43 @@ use crate::viewport::Proj;
 
 /// Reach of a handle around its centre (pixels): wide, so a finger finds it.
 const REACH: f32 = 18.0;
-/// Radius of the drawn ball and knob (pixels).
-const DOT_PX: f32 = 6.5;
+/// Radius of a drawn ball handle (pixels).
+const DOT_PX: f32 = 6.0;
 /// The knob sits this far past the pad's end (pixels).
 const KNOB_GAP_PX: f64 = 28.0;
 /// Rotation step without a modifier (degrees).
 const STEP_DEG: f64 = 5.0;
+/// Points on the round footprint's outline.
+const FOOTPRINT_SEGS: usize = 48;
+/// The handles are near-white, so the blue preview they sit on does not hide them; `EDGE` is the
+/// darker casing drawn under every line and around every ball, so they also carry on a light body.
+const HANDLE: Color32 = Color32::from_rgb(237, 240, 245);
+const EDGE: Color32 = Color32::from_rgb(60, 68, 84);
+
+/// A line in `core`, cased in `EDGE` under it so it reads on the preview and on the body alike.
+fn cased_line(painter: &egui::Painter, a: Pos2, b: Pos2, w: f32, core: Color32) {
+    painter.line_segment([a, b], Stroke::new(w + 2.5, EDGE));
+    painter.line_segment([a, b], Stroke::new(w, core));
+}
+
+/// A closed outline in `core`, cased in `EDGE` under it.
+fn cased_closed(painter: &egui::Painter, pts: &[Pos2], w: f32, core: Color32) {
+    for s in [Stroke::new(w + 2.0, EDGE), Stroke::new(w, core)] {
+        painter.add(egui::Shape::closed_line(pts.to_vec(), s));
+    }
+}
+
+/// A ball handle: near-white with the contrast edge. Hot (under the pointer or dragged) it
+/// brightens to pure white, grows a little, gets a soft halo and an accent edge to say it is live.
+fn ball(painter: &egui::Painter, c: Pos2, hot: bool, t: &Tokens) {
+    if hot {
+        painter.circle_filled(c, REACH, t.accent.gamma_multiply(0.14));
+    }
+    let r = if hot { DOT_PX + 1.5 } else { DOT_PX };
+    let fill = if hot { Color32::WHITE } else { HANDLE };
+    let edge = if hot { t.accent } else { EDGE };
+    painter.circle(c, r, fill, Stroke::new(1.5, edge));
+}
 
 /// Is this dialog a Rest with the handles switched on?
 pub(crate) fn enabled(app: &SolveApp, d: &Dialog) -> bool {
@@ -114,8 +149,36 @@ fn on_plane(proj: &Proj, pos: Pos2, base: Vec3, n: Vec3) -> Option<Vec3> {
     p.is_finite().then_some(p)
 }
 
-/// Draw the handles and take their drags (after the dialog's own arrow, so the ball wins the
-/// pointer near the base).
+/// The pad's footprint on its face: a circle of the diameter, or the rectangle of the length
+/// along `along` and the width across it.
+fn footprint(app: &SolveApp, painter: &egui::Painter, proj: &Proj, d: &Dialog, base: Vec3, n: Vec3) {
+    let Kind::Plastic(Pl::Rest { round, width, length, .. }) = &d.kind else { return };
+    let len = |e: &String| app.session.doc.eval(e, ValueKind::Length).ok().filter(|v| v.is_finite()).unwrap_or(0.0).abs();
+    let (x, y) = axes(n);
+    let pts: Option<Vec<Pos2>> = if *round {
+        let r = len(width) * 0.5;
+        (0..FOOTPRINT_SEGS)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / FOOTPRINT_SEGS as f64;
+                proj.to_screen(base + (x * a.cos() + y * a.sin()) * r)
+            })
+            .collect()
+    } else {
+        let a = along_at(n, angle_of(d, n));
+        let b = n.cross(a);
+        let (hl, hw) = (len(length) * 0.5, len(width) * 0.5);
+        [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)]
+            .into_iter()
+            .map(|(sa, sb)| proj.to_screen(base + a * (sa * hl) + b * (sb * hw)))
+            .collect()
+    };
+    if let Some(pts) = pts.filter(|p| p.len() >= 3) {
+        cased_closed(painter, &pts, 1.5, HANDLE);
+    }
+}
+
+/// Draw the handles and take their drags (after the dialog's own arrow, so the ball wins
+/// the pointer near the base).
 pub(crate) fn show(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj, d: &mut Dialog) {
     if !enabled(app, d) {
         return;
@@ -125,8 +188,10 @@ pub(crate) fn show(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, p
     let t = Tokens::get();
     let area = |c: Pos2| egui::Rect::from_center_size(c, vec2(2.0 * REACH, 2.0 * REACH));
 
-    // The position ball.
-    let r = ui.interact(area(bs), egui::Id::new("sc_rest_position"), egui::Sense::drag());
+    // The ball that moves the pad.
+    let r = ui
+        .interact(area(bs), egui::Id::new("sc_rest_position"), egui::Sense::drag())
+        .on_hover_text(crate::i18n::tr_label("Drag to move the rest across the model. It snaps to sketch points on the face."));
     if r.dragged() {
         crate::tool_modifiers::set_manipulator_dragging(true);
         if let Some(p) = r.interact_pointer_pos() {
@@ -138,10 +203,12 @@ pub(crate) fn show(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, p
     let Some(bs) = proj.to_screen(base) else { return };
     crate::scenario::publish_handle("rest:position", bs);
     let hot = r.hovered() || r.dragged();
-    let col = if hot { t.accent } else { t.manipulator };
-    painter.circle(bs, if hot { DOT_PX + 1.5 } else { DOT_PX }, col, Stroke::new(1.5, Color32::WHITE));
+    if r.dragged() {
+        footprint(app, painter, proj, d, base, n);
+    }
+    ball(painter, bs, hot, &t);
     if hot {
-        ui.ctx().set_cursor_icon(if r.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        ui.ctx().set_cursor_icon(if r.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Move });
     }
 
     // The rotation knob: a rectangular pad only.
@@ -154,7 +221,9 @@ pub(crate) fn show(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, p
     let (x, y) = axes(n);
     let knob_at = |a: f64| proj.to_screen(base + (x * a.cos() + y * a.sin()) * radius);
     let Some(mut ks) = knob_at(angle) else { return };
-    let r = ui.interact(area(ks), egui::Id::new("sc_rest_rotate"), egui::Sense::drag());
+    let r = ui
+        .interact(area(ks), egui::Id::new("sc_rest_rotate"), egui::Sense::drag())
+        .on_hover_text(crate::i18n::tr_label("Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely."));
     if r.dragged()
         && let Some(p) = r.interact_pointer_pos()
     {
@@ -178,9 +247,8 @@ pub(crate) fn show(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, p
     }
     crate::scenario::publish_handle("rest:rotate", ks);
     let hot = r.hovered() || r.dragged();
-    let col = if hot { t.accent } else { t.manipulator };
-    painter.line_segment([bs, ks], Stroke::new(1.0, col));
-    painter.circle(ks, if hot { DOT_PX + 1.5 } else { DOT_PX }, col, Stroke::new(1.5, Color32::WHITE));
+    cased_line(painter, bs, ks, 1.5, if hot { Color32::WHITE } else { HANDLE });
+    ball(painter, ks, hot, &t);
     if hot {
         ui.ctx().set_cursor_icon(if r.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
         let text = format!("{:.0}°", angle.to_degrees());

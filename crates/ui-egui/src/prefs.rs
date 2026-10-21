@@ -3860,7 +3860,7 @@ fn remove_theme(app: &mut SolveApp, id: &str) -> Result<(), String> {
 }
 
 /// The theme on now as a complete theme file, a starting point for a new one.
-fn current_theme_file(app: &SolveApp) -> serde_json::Value {
+pub(crate) fn current_theme_file(app: &SolveApp) -> serde_json::Value {
     match active_theme_file(app) {
         Some(f) => export_theme_file(f),
         None => theme_file(app, &app.preferences.theme, app.prefs_window.system_theme_dark.unwrap_or(app.ui.dark)),

@@ -18,6 +18,11 @@ pub fn resolve(name: &str) -> Resolved {
 }
 
 /// The master to draw at `px` pixels: the small-slot variant where one exists.
+/// The SVG source of a master (the `model` family first), for an export that inlines icons.
+pub fn master_source(master: &str) -> Option<&'static str> {
+    SVGS.iter().find(|(id, fam, _)| *id == master && *fam != "small").or_else(|| SVGS.iter().find(|(id, _, _)| *id == master)).map(|(_, _, src)| *src)
+}
+
 pub fn doc_for(master: &str, px: u32) -> Option<&'static Doc> {
     SET.doc_for(master, px)
 }

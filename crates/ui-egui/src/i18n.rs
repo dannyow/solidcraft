@@ -198,6 +198,22 @@ impl LocaleNames for Locale {
     }
 }
 
+/// The catalog id of an English message, if `text` is one (the reverse of the English catalog;
+/// messages with placeholders are left out). Used by `ui.export_svg`.
+pub fn label_id(text: &str) -> Option<&'static str> {
+    static LABEL_IDS: std::sync::OnceLock<std::collections::BTreeMap<&'static str, &'static str>> = std::sync::OnceLock::new();
+    let ids = LABEL_IDS.get_or_init(|| {
+        Locale::for_language("en")
+            .catalog()
+            .messages()
+            .iter()
+            .filter(|(_, text)| !text.contains('{'))
+            .map(|(id, text)| (text.as_str(), id.as_str()))
+            .collect()
+    });
+    ids.get(text).copied()
+}
+
 pub fn tr_dyn(text: &str) -> String {
     solidcraft_ui_text::locale().dynamic(text)
 }

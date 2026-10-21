@@ -77,7 +77,13 @@ pub(crate) fn publish_design(app: &mut SolveApp, watch: &DocumentWatch) {
 
 pub enum Outcome {
     Done(Value),
-    Screenshot { path: Option<String> },
+    Screenshot {
+        path: Option<String>,
+    },
+    /// `ui.export_svg`: written at the end of the frame, when its shapes are complete.
+    ExportSvg {
+        path: Option<String>,
+    },
 }
 
 fn ok(v: Value) -> Outcome {
@@ -774,6 +780,10 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
         "ui.screenshot" => with(p, |q: params::Screenshot| match q.path.as_deref().map(vfs::check) {
             Some(Err(e)) => err(e),
             _ => Outcome::Screenshot { path: q.path },
+        }),
+        "ui.export_svg" => with(p, |q: params::Screenshot| match q.path.as_deref().map(vfs::check) {
+            Some(Err(e)) => err(e),
+            _ => Outcome::ExportSvg { path: q.path },
         }),
         "ui.render" => with(p, |q| ui_render(app, q)),
         "app.quit" => with(p, |q| app_quit(app, ctx, q)),
@@ -2535,7 +2545,7 @@ mod tests {
         let (req, _rx) = ControlRequest::new("ui.render", json!({"path": path.to_string_lossy(), "width": 200, "height": 140}));
         match handle(app, &crate::fonts::test_context(), &req) {
             Outcome::Done(v) => assert_eq!(v["ok"], true, "{v}"),
-            Outcome::Screenshot { .. } => panic!("ui.render took a screenshot"),
+            Outcome::Screenshot { .. } | Outcome::ExportSvg { .. } => panic!("ui.render took a screenshot"),
         }
         std::fs::read(path).unwrap()
     }
@@ -2639,7 +2649,7 @@ mod tests {
                 assert_eq!(v["ok"], true, "{v}");
                 v["result"]["renderer"].as_str().or(v["renderer"].as_str()).unwrap_or("unknown").to_string()
             }
-            Outcome::Screenshot { .. } => panic!("ui.render took a screenshot"),
+            Outcome::Screenshot { .. } | Outcome::ExportSvg { .. } => panic!("ui.render took a screenshot"),
         };
         (std::fs::read(path).unwrap(), renderer)
     }
@@ -3375,6 +3385,7 @@ mod tests {
             match handle(&mut app, &crate::fonts::test_context(), &req) {
                 Outcome::Done(v) => v,
                 Outcome::Screenshot { path } => json!({"ok": true, "screenshot": path}),
+                Outcome::ExportSvg { path } => json!({"ok": true, "svg": path}),
             }
         };
         let export = |p: String| json!({"command": "file.export", "params": {"path": p}});
@@ -3467,6 +3478,7 @@ mod tests {
             match handle(&mut app, &crate::fonts::test_context(), &req) {
                 Outcome::Done(v) => v,
                 Outcome::Screenshot { path } => json!({"ok": true, "screenshot": path}),
+                Outcome::ExportSvg { path } => json!({"ok": true, "svg": path}),
             }
         };
         let designs = json!([proj.to_string_lossy()]);
@@ -3507,7 +3519,7 @@ mod tests {
             let (req, _rx) = ControlRequest::new(method, params);
             match handle(&mut h.app, &h.ctx, &req) {
                 Outcome::Done(v) => v,
-                Outcome::Screenshot { .. } => Value::Null,
+                Outcome::Screenshot { .. } | Outcome::ExportSvg { .. } => Value::Null,
             }
         }
         raw(&mut h, "ui.view", json!({"view": "top", "animate": true}));

@@ -354,6 +354,7 @@ pub mod tools;
 pub use solidcraft_ui_kit as ui_kit;
 #[cfg(test)]
 mod ui_kit_guard_tests;
+pub mod ui_svg;
 pub mod update;
 mod value_step;
 pub(crate) mod view_angles;
@@ -886,6 +887,10 @@ pub struct SolveApp {
     pub ai_connect: ai_connect::State,
     /// The window's screenshots in flight: control requests' and the issue report's.
     shots: solidcraft_control_egui::screenshot::Shots,
+    /// A `ui.export_svg` waiting for the end of this frame: its path and who asked.
+    pending_svg: Option<(Option<String>, Option<std::sync::mpsc::Sender<Value>>)>,
+    /// The last export's answer when nobody waited on a channel (the headless harness).
+    pub(crate) svg_reply: Option<Value>,
     styled: bool,
     fitted: bool,
     /// A framing to settle once the viewport's layout is known: the camera to frame from, the
@@ -1118,6 +1123,8 @@ impl SolveApp {
             plugin_slots: Default::default(),
             agent: Default::default(),
             shots: solidcraft_control_egui::screenshot::Shots::new("no frame was presented (window hidden?); use ui.render"),
+            pending_svg: None,
+            svg_reply: None,
             styled: false,
             fitted: false,
             pending_fit: None,
@@ -3895,6 +3902,16 @@ impl SolveApp {
         render_workspace::displayed::finish(self, ui.ctx());
         documents::sync_views(self);
         documents::sync_window_title(self, ui.ctx());
+        // Last: the frame's shapes are complete, and egui drains them when the pass ends.
+        if let Some((path, reply)) = self.pending_svg.take() {
+            let answer = ui_svg::export_live(self, ui.ctx(), path.as_deref());
+            match reply {
+                Some(reply) => {
+                    let _ = reply.send(answer);
+                }
+                None => self.svg_reply = Some(answer),
+            }
+        }
     }
 
     fn cad_ui(&mut self, ui: &mut egui::Ui, report_input: &mut Option<issue_report::CadInput>) {
@@ -4122,6 +4139,9 @@ impl SolveApp {
                 let _ = reply.send(v);
             }
             control::Outcome::Screenshot { path } => self.shots.request(ctx, path, reply, req.chat_turn, now_ms()),
+            control::Outcome::ExportSvg { path } => {
+                self.pending_svg = Some((path, Some(reply)));
+            }
         }
         ctx.request_repaint();
     }

@@ -255,8 +255,9 @@ pub(crate) fn preview(ui: &mut egui::Ui, form: &Kind, to_object: bool, choice: C
 
 /// What the form's hole looks like, for its picture.
 fn section(k: &Kind, to_object: bool, eval: &dyn Fn(&str, ValueKind) -> Option<f64>) -> Option<Section> {
-    let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } = k else { return None };
-    let kind = *kind;
+    let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts, .. } = k else { return None };
+    // A teardrop (3) is drawn as its round bore; its own rows follow the section (spike).
+    let kind = if *kind == 3 { 0 } else { *kind };
     let len = |e: &str| eval(e, ValueKind::Length).filter(|v| v.is_finite() && *v > 0.0);
     let angle = |e: &str, lo: f64, hi: f64, or: f64| eval(e, ValueKind::Angle).filter(|v| v.is_finite()).map_or(or, |v| (v / 2.0).clamp(lo, hi));
     let top = if kind == 2 { cs_diameter.as_str() } else { cb_diameter.as_str() };
@@ -302,8 +303,8 @@ fn section(k: &Kind, to_object: bool, eval: &dyn Fn(&str, ValueKind) -> Option<f
 /// fields beside it. Returns whether Enter was accepted in a field.
 pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Kind, to_object: bool, eval: &dyn Fn(&str, ValueKind) -> Option<f64>) -> bool {
     let Some(section) = section(k, to_object, eval) else { return false };
-    let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } = k else { return false };
-    let kind = *kind;
+    let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts, .. } = k else { return false };
+    let kind = if *kind == 3 { 0 } else { *kind };
     let dims = dims(kind, opts, to_object);
     // The fields in `dims`' order, each value taken once.
     let mut fields: Vec<(&str, &mut String)> = Vec::with_capacity(dims.len());

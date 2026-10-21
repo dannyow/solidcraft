@@ -6992,6 +6992,8 @@ fn hole_reach(
         HoleKind::Counterbore { cb_diameter: w, .. } | HoleKind::Countersink { cs_diameter: w, .. } => {
             val(vals, w, Kind::Length).map_or(r, |d| (d / 2.0).max(r))
         }
+        // A teardrop reaches no further from the axis than its peak, r / sin(angle).
+        HoleKind::Teardrop { angle, .. } => val(vals, angle, Kind::Angle).map_or(r, |a| if a.sin() > 1e-3 { (r / a.sin()).max(r) } else { r }),
         HoleKind::Simple | HoleKind::Drilled { .. } => r,
     };
     let (top, above) = hole_run_on(st, &plane, if wide.is_finite() { wide } else { r }, top);
@@ -7142,6 +7144,18 @@ fn hole_tools_reaching(
             );
             tools.extend(bore(tip_angle.as_ref())?);
         }
+        HoleKind::Teardrop { apex, angle, cap } => {
+            let ang = val(vals, angle, Kind::Angle)?;
+            let cap = cap.as_ref().map(|c| val(vals, c, Kind::Length)).transpose()?;
+            // The apex in the tool plane: the printer's up, less its part along the hole's axis.
+            let up = plane
+                .to_local(*position + apex.0)
+                .normalized()
+                .ok_or_else(|| DocError::Invalid("a hole along the build direction prints round; a teardrop needs a hole across it".into()))?;
+            let region = Region2 { outer: teardrop_loop(r, ang, cap, up)?, holes: vec![] };
+            let tool = kernel::extrude(&plane, &[region], bottom, top)?.pop().ok_or_else(|| DocError::Invalid("hole tool".into()))?;
+            tools.push((crate::lineage::part_tool(tool, "bore"), None));
+        }
     }
     if above.is_empty() {
         return Ok(tools);
@@ -7215,6 +7229,42 @@ fn bridge_tools(plane: &Plane, r: f64, rc: f64, dc: f64, bottom: f64, layer: f64
         tools.push((crate::lineage::part_tool(tool, "bridge"), None));
     }
     Ok(tools)
+}
+
+/// The cross-section of a teardrop hole of radius `r`, counter-clockwise: the round bottom, two
+/// walls tangent to it at `ang` from `up` (the apex direction, a unit vector) meeting at the peak
+/// r / sin(ang) above the centre, or cut flat at `cap` above the centre.
+pub fn teardrop_loop(r: f64, ang: f64, cap: Option<f64>, up: Vec2) -> Result<solidcore_record::Loop2> {
+    use solidcore_record::Seg2;
+    if !(ang > 1e-3 && ang < std::f64::consts::FRAC_PI_2 - 1e-3) {
+        return Err(DocError::Invalid("the teardrop's overhang angle must be between 0° and 90°".into()));
+    }
+    let peak = r / ang.sin();
+    let cap = match cap {
+        Some(c) if c >= peak - 1e-9 => return Err(DocError::Invalid(format!("the cap must be below the peak ({:.3} mm above the centre)", peak))),
+        Some(c) if c < r => return Err(DocError::Invalid("the cap must be at least the hole's radius above the centre".into())),
+        c => c,
+    };
+    // Local frame: `up` is +y, `right` is +x.
+    let right = Vec2::new(up.y, -up.x);
+    let at = |x: f64, y: f64| right * x + up * y;
+    let base = up.angle() - std::f64::consts::FRAC_PI_2; // the polar angle of `right`
+    let mut segs =
+        vec![Seg2::Arc { center: Vec2::ZERO, radius: r, start: base + std::f64::consts::PI - ang, sweep: std::f64::consts::PI + 2.0 * ang }];
+    let (tx, ty) = (r * ang.cos(), r * ang.sin());
+    match cap {
+        None => {
+            segs.push(Seg2::Line { a: at(tx, ty), b: at(0.0, peak) });
+            segs.push(Seg2::Line { a: at(0.0, peak), b: at(-tx, ty) });
+        }
+        Some(c) => {
+            let half = (peak - c) * ang.tan();
+            segs.push(Seg2::Line { a: at(tx, ty), b: at(half, c) });
+            segs.push(Seg2::Line { a: at(half, c), b: at(-half, c) });
+            segs.push(Seg2::Line { a: at(-half, c), b: at(-tx, ty) });
+        }
+    }
+    Ok(solidcore_record::Loop2 { segs })
 }
 
 /// The angular interval used by both the solid and its interactive extent handles.

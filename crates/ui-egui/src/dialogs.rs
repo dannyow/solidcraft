@@ -117,8 +117,12 @@ const INTERSECT_GEOMETRY: Accept = EDGES | FACES | selection::SKETCH_LINES;
 /// What Align's From and To pick: model geometry, planes and the origin, and sketch points and
 /// circles (a frame the bodies follow, #6257).
 const ALIGN_PICKS: Accept = FACES | EDGES | selection::VERTICES | PLANES | selection::ORIGIN | selection::POINTS | CURVES;
-const HOLE_TYPES: [&str; 3] = ["simple", "counterbore", "countersink"];
-const HOLE_LABELS: [&str; 3] = ["Simple", "Counterbore", "Countersink"];
+const HOLE_TYPES: [&str; 4] = ["simple", "counterbore", "countersink", "teardrop"];
+const HOLE_LABELS: [&str; 4] = ["Simple", "Counterbore", "Countersink", "Teardrop"];
+/// Where a teardrop hole's peak points (the printer's up): a world axis, as the Apex combo lists them.
+pub(crate) const APEX_LABELS: [&str; 6] = ["+Z", "−Z", "+X", "−X", "+Y", "−Y"];
+pub(crate) const APEX_DIRS: [[f64; 3]; 6] = [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0]];
+pub(crate) const PEAK_LABELS: [&str; 2] = ["Pointed", "Flat"];
 
 crate::dialog_descriptor::dialog_descriptors! {
     #[derive(Clone, Debug)]
@@ -372,6 +376,12 @@ crate::dialog_descriptor::dialog_descriptors! {
                 cb_depth: String,
                 cs_diameter: String,
                 cs_angle: String,
+                /// Teardrop: the apex (an index into `APEX_DIRS`), the overhang angle, and the
+                /// peak (0 pointed, 1 cut flat at `td_cap` above the centre).
+                td_apex: usize,
+                td_angle: String,
+                td_peak: usize,
+                td_cap: String,
                 opts: HoleOpts,
             },
             Primitive {
@@ -5255,6 +5265,10 @@ pub(crate) fn shown_expr(e: &str, kind: ValueKind) -> String {
     if solidcraft_engine::doc::expr::is_bare_number(e) { format!("{} {unit}", e.trim()) } else { e.to_string() }
 }
 
+fn dot(a: &[f64; 3], v: Vec3) -> f64 {
+    a[0] * v.x + a[1] * v.y + a[2] * v.z
+}
+
 fn hole_defaults(s: &Session) -> Kind {
     Kind::Hole {
         diameter: length_default(s, "5"),
@@ -5264,6 +5278,10 @@ fn hole_defaults(s: &Session) -> Kind {
         cb_depth: length_default(s, "3"),
         cs_diameter: length_default(s, "10"),
         cs_angle: "90 deg".into(),
+        td_apex: 0,
+        td_angle: "45 deg".into(),
+        td_peak: 0,
+        td_cap: length_default(s, "2.5"),
         opts: HoleOpts::default(),
     }
 }
@@ -6584,7 +6602,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             ("inspect.section", json!({"plane": plane, "offset": offset, "flip": flip, "hatch": hatch}))
         }
         Kind::Move { .. } => return crate::dialogs_move::commands(app, d),
-        Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } => {
+        Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, td_apex, td_angle, td_peak, td_cap, opts } => {
             let folder = crate::hole_folder::active(d);
             if !folder {
                 need(0, if opts.multiple { "sketch points" } else { "a face position" })?;
@@ -6737,6 +6755,13 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                     2 => {
                         params["cs_diameter"] = json!(cs_diameter);
                         params["cs_angle"] = json!(cs_angle);
+                    }
+                    3 => {
+                        params["apex"] = json!(APEX_DIRS.get(*td_apex).copied().unwrap_or([0.0, 0.0, 1.0]));
+                        params["angle"] = json!(td_angle);
+                        if *td_peak == 1 {
+                            params["cap"] = json!(td_cap);
+                        }
                     }
                     _ => {}
                 }
@@ -7978,7 +8003,21 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
         } => {
             let mut d = start("solid.hole")?;
             let mut k = hole_defaults(s);
-            if let Kind::Hole { diameter: dia, depth: dep, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } = &mut k {
+            if let Kind::Hole {
+                diameter: dia,
+                depth: dep,
+                kind,
+                cb_diameter,
+                cb_depth,
+                cs_diameter,
+                cs_angle,
+                td_apex,
+                td_angle,
+                td_peak,
+                td_cap,
+                opts,
+            } = &mut k
+            {
                 *dia = diameter.to_string();
                 opts.all = depth.is_none();
                 opts.angled = matches!(hole, HoleKind::Drilled { .. });
@@ -8026,6 +8065,16 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                     }
                     HoleKind::Drilled { tip_angle } => {
                         opts.tip_angle = tip_angle.to_string();
+                    }
+                    HoleKind::Teardrop { apex, angle, cap } => {
+                        *kind = 3;
+                        // The nearest listed axis; a free direction from a script shows as that.
+                        *td_apex = APEX_DIRS.iter().enumerate().max_by(|a, b| dot(a.1, apex.0).total_cmp(&dot(b.1, apex.0))).map_or(0, |(i, _)| i);
+                        *td_angle = angle.to_string();
+                        if let Some(c) = cap {
+                            *td_peak = 1;
+                            *td_cap = c.to_string();
+                        }
                     }
                     HoleKind::Simple => {}
                 }

@@ -69,7 +69,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SOLID", "CREATE")
         .icon("hole")
         .key("H")
-        .params("position: [x,y,z] on a face (numbers, or length expressions the hole follows) | sketch + points: [sketch point ids] (one hole each, perpendicular to the sketch, into the material on whichever side of the sketch plane it is) | sketch alone (every sketch point: standalone points and circle centres); flip?: bool (sketch points: drill to the other side); single?: bool (with one sketch point: a Single hole that follows the point, drilled into the face there); direction?: [x,y,z] (default: into the face, against its outward normal; one that leaves the face is mirrored into it; ignored with sketch points unless single); diameter | thread (a tapped hole: metric major minus pitch or tabulated UNC/UNF, G or Rp cut-tap drill) | clearance: \"M6\" with fit?: close|normal|loose (ISO 273); depth? (default through all) | to?: [x,y,z] (To Object: drill to that face or point); references?: [{edge: [x,y,z] on a straight edge of the face, distance: expr}] (at most two; the centre goes that far from each edge's line, in the face's plane, and follows the edges; with a numeric position only); type?: simple|drilled|counterbore|countersink; tip_angle?; cb_diameter?, cb_depth?; cs_diameter?, cs_angle?; thread?: \"M6\" or \"1/4-20 UNC\" (cosmetic); handedness?: right|left (default right, needs thread for left); thread_depth?: positive length independent of drill depth (default: full useful cylindrical wall; must fit that wall); targets?: [body] (the bodies to drill; holes at the points of a sketch on a body's face default to that body, found along the holes' direction on it alone; explicit targets or participants override, [\"*\"] every body)"),
+        .params("position: [x,y,z] on a face (numbers, or length expressions the hole follows) | sketch + points: [sketch point ids] (one hole each, perpendicular to the sketch, into the material on whichever side of the sketch plane it is) | sketch alone (every sketch point: standalone points and circle centres); flip?: bool (sketch points: drill to the other side); single?: bool (with one sketch point: a Single hole that follows the point, drilled into the face there); direction?: [x,y,z] (default: into the face, against its outward normal; one that leaves the face is mirrored into it; ignored with sketch points unless single); diameter | thread (a tapped hole: metric major minus pitch or tabulated UNC/UNF, G or Rp cut-tap drill) | clearance: \"M6\" with fit?: close|normal|loose (ISO 273); depth? (default through all) | to?: [x,y,z] (To Object: drill to that face or point); references?: [{edge: [x,y,z] on a straight edge of the face, distance: expr}] (at most two; the centre goes that far from each edge's line, in the face's plane, and follows the edges; with a numeric position only); type?: simple|drilled|counterbore|countersink|teardrop; tip_angle?; cb_diameter?, cb_depth?; cs_diameter?, cs_angle?; teardrop (a hole across the build direction of a 3D print): apex?: [x,y,z] (the printer's up, default Z; refused for a hole along it), angle? (the roof's overhang from the apex, default 45 deg), cap? (cut the peak flat this far above the centre, for a short bridge; pointed without); thread?: \"M6\" or \"1/4-20 UNC\" (cosmetic); handedness?: right|left (default right, needs thread for left); thread_depth?: positive length independent of drill depth (default: full useful cylindrical wall; must fit that wall); targets?: [body] (the bodies to drill; holes at the points of a sketch on a body's face default to that body, found along the holes' direction on it alone; explicit targets or participants override, [\"*\"] every body)"),
     CommandSpec::new("solid.pipe", "Pipe", pipe)
         .at("SOLID", "CREATE")
         .icon("pipe")
@@ -2505,6 +2505,20 @@ fn hole(s: &mut Session, p: &Value) -> Result<Value> {
             cs_angle: expr(p, "cs_angle").unwrap_or_else(|| "90 deg".into()),
             tip_angle: expr(p, "tip_angle"),
         },
+        "teardrop" => {
+            // The printer's up: world Z unless given. A hole along it is refused at evaluation.
+            let apex = match p.get("apex") {
+                Some(v) => vec3(v).and_then(|d| d.normalized()).ok_or_else(|| bad(cmd, "`apex` must be a non-zero direction [x, y, z]"))?,
+                None => Vec3::Z,
+            };
+            let angle = expr(p, "angle").unwrap_or_else(|| "45 deg".into());
+            check_expr(s, &angle, Kind::Angle, cmd, "angle")?;
+            let cap = expr(p, "cap");
+            if let Some(c) = &cap {
+                check_expr(s, c, Kind::Length, cmd, "cap")?;
+            }
+            solidcraft_doc::HoleKind::Teardrop { apex: solidcraft_doc::Dir(apex), angle, cap }
+        }
         other => return Err(bad(cmd, format!("unknown hole type `{other}`"))),
     };
     let to = match p.get("to") {

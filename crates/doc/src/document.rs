@@ -2153,6 +2153,17 @@ pub enum HoleKind {
         #[walk(angle = "Tip angle")]
         tip_angle: Option<Expr>,
     },
+    /// A hole across the build direction of a 3D print, peaked towards `apex` (the printer's up)
+    /// so its roof overhangs no steeper than `angle` from the apex; `cap` cuts the peak flat at
+    /// that height above the centre for a short bridge (pointed when absent).
+    Teardrop {
+        apex: Dir,
+        #[walk(angle = "Overhang angle")]
+        angle: Expr,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Cap height")]
+        cap: Option<Expr>,
+    },
 }
 
 /// A Single hole's reference edge (#37): a point on a straight edge of the hole's face, and the

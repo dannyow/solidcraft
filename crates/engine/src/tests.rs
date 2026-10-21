@@ -816,6 +816,7 @@ fn hostile_params_never_panic() {
         "curve",
         "minor_radius",
         "apex",
+        "cap",
         "rho",
         "text",
         "lines",

@@ -164,6 +164,17 @@ fn disc_inside(r: f64, a: f64) -> f64 {
     PI * r * r - (r * r * (a / r).acos() - a * (r * r - a * a).sqrt())
 }
 
+/// The cross-section of a teardrop hole of radius r: the round part plus the two tangent walls at
+/// `ang` degrees from the apex direction, less the tip above a flat cap `cap` above the centre.
+fn teardrop(r: f64, ang: f64, cap: Option<f64>) -> f64 {
+    let a = ang.to_radians();
+    let full = r * r * (PI / 2.0 + a + 1.0 / a.tan());
+    match cap {
+        Some(c) => full - (r / a.sin() - c).powi(2) * a.tan(),
+        None => full,
+    }
+}
+
 /// A radial hole of radius r, `depth` deep, drilled into a cylinder of radius `rr` from its
 /// surface: the material between the surface and the bottom, over the bore's disc.
 fn radial(rr: f64, r: f64, depth: f64) -> f64 {
@@ -428,6 +439,26 @@ fn cases() -> Vec<Case> {
             vec![spot([20.0, 15.0, 0.0], UP, 20.0, None)],
         )
         .faces(2),
+        // A teardrop: a hole across the build direction (apex +Z) in the +x side face, pointed
+        // and cut flat at the radius (never shorter than nominal).
+        Case::new(
+            "type/teardrop/through",
+            block(),
+            hole(json!({"position": [40, 15, 10], "type": "teardrop", "angle": "45 deg"})),
+            teardrop(r, 45.0, None) * 40.0,
+            r,
+            vec![spot([40.0, 15.0, 10.0], [-1.0, 0.0, 0.0], 40.0, None)],
+        )
+        .faces(3),
+        Case::new(
+            "type/teardrop-capped/blind",
+            block(),
+            hole(json!({"position": [40, 15, 10], "type": "teardrop", "depth": 10, "cap": 3, "apex": [0, 0, 1]})),
+            teardrop(r, 45.0, Some(3.0)) * 10.0,
+            r,
+            vec![spot([40.0, 15.0, 10.0], [-1.0, 0.0, 0.0], 10.0, Some(10.0))],
+        )
+        .faces(5),
         Case::new(
             "type/tapped-m6/blind",
             block(),
@@ -855,4 +886,50 @@ fn recessed_drill_point_through_and_exact_shoulder_keep_the_existing_exit() {
             assert!(!solid_at(&s, Vec3::new(20.0, 15.0, 0.01)));
         }
     }
+}
+
+/// A teardrop prints only across its apex: along it the hole is refused, as are an overhang the
+/// printer cannot do and a cap that would shorten the hole or miss the peak. Edited back to a
+/// plain hole, the teardrop is gone; saved and reopened, it is still a teardrop.
+#[test]
+fn a_teardrop_hole_is_refused_where_it_cannot_print() {
+    let mut s = Session::default();
+    for (id, p) in block() {
+        run(&mut s, id, p).unwrap();
+    }
+    let td = |extra: Value| {
+        let mut p = json!({"position": [40, 15, 10], "type": "teardrop", "diameter": 6, "name": "H"});
+        if let (Some(m), Some(x)) = (p.as_object_mut(), extra.as_object()) {
+            m.extend(x.clone());
+        }
+        p
+    };
+    for (what, extra, says) in [
+        ("a hole along the apex", json!({"position": [20, 15, 20]}), "across"),
+        ("a 0° overhang", json!({"angle": "0 deg"}), "between 0° and 90°"),
+        ("a 90° overhang", json!({"angle": "90 deg"}), "between 0° and 90°"),
+        ("a cap below the radius", json!({"cap": 2}), "at least the hole's radius"),
+        ("a cap above the peak", json!({"cap": 5}), "below the peak"),
+        ("a zero apex", json!({"apex": [0, 0, 0]}), "non-zero"),
+    ] {
+        let e = s.execute("solid.hole", &td(extra)).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(e.contains(says), "{what}: {e:?} should say {says:?}");
+        assert!(s.doc.features.iter().all(|f| f.name != "H"), "{what}: the refused hole is not kept");
+    }
+    // A capped teardrop, then edited to a plain hole and back, and reopened from its JSON.
+    let (v0, _) = measure(&mut s).unwrap();
+    run(&mut s, "solid.hole", td(json!({"cap": 3, "apex": [0, 0, 1]}))).unwrap();
+    let (v1, _) = measure(&mut s).unwrap();
+    assert!(close(v0 - v1, teardrop(3.0, 45.0, Some(3.0)) * 40.0, v0), "capped teardrop through: {}", v0 - v1);
+    let (id, p) = edit(json!({"hole": {"type": "simple"}}));
+    run(&mut s, id, p).unwrap();
+    let (v2, _) = measure(&mut s).unwrap();
+    assert!(close(v0 - v2, cyl(3.0, 40.0), v0), "edited to a plain hole: {}", v0 - v2);
+    let (id, p) = edit(json!({"hole": {"type": "teardrop", "apex": [0, 0, 1], "angle": "45 deg"}}));
+    run(&mut s, id, p).unwrap();
+    let (v3, _) = measure(&mut s).unwrap();
+    assert!(close(v0 - v3, teardrop(3.0, 45.0, None) * 40.0, v0), "edited back to a pointed teardrop: {}", v0 - v3);
+    let doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
+    let kind = doc.features.iter().find(|f| f.name == "H").map(|f| &f.kind).unwrap();
+    assert!(matches!(kind, solidcraft_doc::FeatureKind::Hole { hole: solidcraft_doc::HoleKind::Teardrop { cap: None, .. }, .. }), "{kind:?}");
 }

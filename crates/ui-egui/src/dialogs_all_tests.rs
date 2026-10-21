@@ -931,3 +931,46 @@ fn extrude_builds_the_one_region_clicked_where_the_face_outline_cuts_a_profile()
         assert!(((volume - before) - area * 5.0).abs() < 5e-3 * area * 5.0, "x = {x}: {volume} - {before} vs {}", area * 5.0);
     }
 }
+
+/// The Hole form's fourth type: a teardrop with its apex, overhang angle and flat cap, cut from
+/// the dialog, and shown again with the same rows when the hole is edited.
+#[test]
+fn the_hole_form_cuts_a_teardrop_and_shows_it_again_on_edit() {
+    let mut h = Harness::new();
+    h.app.set_origin_shown(false);
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    let mut d = Dialog::for_command(&h.app, "solid.hole").unwrap();
+    d.inputs[0].items = vec![face_sel(&h.app.session, Vec3::new(40.0, 15.0, 10.0)).unwrap()];
+    if let Kind::Hole { kind, td_apex, td_angle, td_peak, td_cap, opts, .. } = &mut d.kind {
+        *kind = 3;
+        *td_apex = 0;
+        *td_angle = "40 deg".into();
+        *td_peak = 1;
+        *td_cap = "3 mm".into();
+        opts.all = true;
+    }
+    let cmds = dialog_commands(&h.app, &d).unwrap();
+    let (id, p) = cmds.first().unwrap();
+    assert_eq!(id, "solid.hole");
+    assert_eq!(p["type"], json!("teardrop"));
+    assert_eq!(p["apex"], json!([0.0, 0.0, 1.0]));
+    assert_eq!(p["angle"], json!("40 deg"));
+    assert_eq!(p["cap"], json!("3 mm"));
+    h.app.run(id, p.clone()).unwrap();
+    let f = h.app.session.doc.features.last().unwrap();
+    let Some(FeatureKind::Hole { hole: HoleKind::Teardrop { apex, angle, cap }, .. }) = Some(&f.kind) else { panic!("{:?}", f.kind) };
+    assert!(apex.0.dist(Vec3::Z) < 1e-9);
+    assert_eq!(angle.to_string(), "40 deg");
+    assert_eq!(cap.as_ref().map(ToString::to_string), Some("3 mm".into()));
+    // Edit: the form comes back on the teardrop rows with the same values.
+    let id = f.id;
+    let e = for_feature(&h.app, id, None).unwrap();
+    let Kind::Hole { kind, td_apex, td_angle, td_peak, td_cap, .. } = &e.kind else { panic!("{:?}", e.kind) };
+    assert_eq!((*kind, *td_apex, td_angle.as_str(), *td_peak, td_cap.as_str()), (3, 0, "40 deg", 1, "3 mm"));
+    // A pointed one from a script in the −y face, apex −X (across the hole): the combo shows −X and Pointed.
+    h.app.run("solid.hole", json!({"position": [20, 0, 10], "type": "teardrop", "diameter": 5, "apex": [-1, 0, 0], "name": "P"})).unwrap();
+    let id = h.app.session.doc.features.last().unwrap().id;
+    let e = for_feature(&h.app, id, None).unwrap();
+    let Kind::Hole { kind, td_apex, td_peak, .. } = &e.kind else { panic!("{:?}", e.kind) };
+    assert_eq!((*kind, *td_apex, *td_peak), (3, 3, 0));
+}

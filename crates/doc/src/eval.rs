@@ -4737,8 +4737,56 @@ fn hole_tools_and_prisms(
             tools.push((crate::lineage::part_tool(kernel::extrude_tapered(&top_plane, &disc(r_top), len, -1.0, -half)?, "csink"), None));
             tools.extend(bore(tip_angle.as_ref())?);
         }
+        HoleKind::Teardrop { apex, angle, cap } => {
+            let ang = val(vals, angle, Kind::Angle)?;
+            let cap = cap.as_ref().map(|c| val(vals, c, Kind::Length)).transpose()?;
+            // The apex in the tool plane: the printer's up, less its part along the hole's axis.
+            let up = plane
+                .to_local(*position + apex.0)
+                .normalized()
+                .ok_or_else(|| DocError::Invalid("a hole along the build direction prints round; a teardrop needs a hole across it".into()))?;
+            let region = Region2 { outer: teardrop_loop(r, ang, cap, up)?, holes: vec![] };
+            let tool = kernel::extrude(&plane, &[region], bottom, top)?.pop().ok_or_else(|| DocError::Invalid("hole tool".into()))?;
+            tools.push((crate::lineage::part_tool(tool, "bore"), None));
+        }
     }
     Ok(tools)
+}
+
+/// The cross-section of a teardrop hole of radius `r`, counter-clockwise: the round bottom, two
+/// walls tangent to it at `ang` from `up` (the apex direction, a unit vector) meeting at the peak
+/// r / sin(ang) above the centre, or cut flat at `cap` above the centre.
+pub fn teardrop_loop(r: f64, ang: f64, cap: Option<f64>, up: Vec2) -> Result<solidcraft_geom::Loop2> {
+    use solidcraft_geom::Seg2;
+    if !(ang > 1e-3 && ang < std::f64::consts::FRAC_PI_2 - 1e-3) {
+        return Err(DocError::Invalid("the teardrop's overhang angle must be between 0° and 90°".into()));
+    }
+    let peak = r / ang.sin();
+    let cap = match cap {
+        Some(c) if c >= peak - 1e-9 => return Err(DocError::Invalid(format!("the cap must be below the peak ({:.3} mm above the centre)", peak))),
+        Some(c) if c < r => return Err(DocError::Invalid("the cap must be at least the hole's radius above the centre".into())),
+        c => c,
+    };
+    // Local frame: `up` is +y, `right` is +x.
+    let right = Vec2::new(up.y, -up.x);
+    let at = |x: f64, y: f64| right * x + up * y;
+    let base = up.angle() - std::f64::consts::FRAC_PI_2; // the polar angle of `right`
+    let mut segs =
+        vec![Seg2::Arc { center: Vec2::ZERO, radius: r, start: base + std::f64::consts::PI - ang, sweep: std::f64::consts::PI + 2.0 * ang }];
+    let (tx, ty) = (r * ang.cos(), r * ang.sin());
+    match cap {
+        None => {
+            segs.push(Seg2::Line { a: at(tx, ty), b: at(0.0, peak) });
+            segs.push(Seg2::Line { a: at(0.0, peak), b: at(-tx, ty) });
+        }
+        Some(c) => {
+            let half = (peak - c) * ang.tan();
+            segs.push(Seg2::Line { a: at(tx, ty), b: at(half, c) });
+            segs.push(Seg2::Line { a: at(half, c), b: at(-half, c) });
+            segs.push(Seg2::Line { a: at(-half, c), b: at(-tx, ty) });
+        }
+    }
+    Ok(solidcraft_geom::Loop2 { segs })
 }
 
 /// The angular interval used by both the solid and its interactive extent handles.

@@ -541,6 +541,14 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
             let to_object = to_object_on(&d.inputs);
             let doc = &app.session.doc;
             enter |= crate::dialogs_hole::rows(ui, &mut d.kind, to_object, &|e, k| doc.eval(e, k).ok());
+            if let Kind::Hole { kind: 3, td_apex, td_angle, td_peak, td_cap, .. } = &mut d.kind {
+                choice_row(ui, "Apex", "hole_apex", td_apex, &crate::dialogs::APEX_LABELS);
+                enter |= expr_row(ui, "Overhang angle", td_angle);
+                choice_row(ui, "Peak", "hole_peak", td_peak, &crate::dialogs::PEAK_LABELS);
+                if *td_peak == 1 {
+                    enter |= expr_row(ui, "Cap height", td_cap);
+                }
+            }
         }
         _ => enter |= additional_rows(app, d, ui),
     }

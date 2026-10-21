@@ -97,8 +97,9 @@ struct Section {
 /// The section and its sizes (`ui_kit::figure_rows`): the picture in the label column, the
 /// fields beside it. Returns whether Enter was accepted in a field.
 pub(crate) fn rows(ui: &mut egui::Ui, k: &mut Kind, to_object: bool, eval: &dyn Fn(&str, ValueKind) -> Option<f64>) -> bool {
-    let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } = k else { return false };
-    let kind = *kind;
+    let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts, .. } = k else { return false };
+    // A teardrop (3) is drawn as its round bore; its own rows follow the section (spike).
+    let kind = if *kind == 3 { 0 } else { *kind };
     let dims = dims(kind, opts, to_object);
     let len = |e: &str| eval(e, ValueKind::Length).filter(|v| v.is_finite() && *v > 0.0);
     let angle = |e: &str, lo: f64, hi: f64, or: f64| eval(e, ValueKind::Angle).filter(|v| v.is_finite()).map_or(or, |v| (v / 2.0).clamp(lo, hi));

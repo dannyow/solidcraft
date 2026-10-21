@@ -125,7 +125,7 @@ impl Preset {
     }
 
     fn capture(d: &Dialog, name: &str, doc: &Document) -> Result<Self, &'static str> {
-        let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } = &d.kind else {
+        let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts, .. } = &d.kind else {
             return Err("hole_presets.invalid_parameters");
         };
         if opts.tapped && opts.custom_thread.as_ref().is_some_and(|draft| draft.error.is_some()) {
@@ -243,7 +243,7 @@ impl Preset {
         if !self.thread_options.unknown.is_empty() {
             return Err("hole_presets.unsupported_options");
         }
-        let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } = &mut d.kind else {
+        let Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts, .. } = &mut d.kind else {
             return Err("hole_presets.invalid_parameters");
         };
         diameter.clone_from(&self.diameter);

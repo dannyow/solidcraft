@@ -63,6 +63,9 @@ struct Writer<'a> {
     skipped: Skipped,
     clips: usize,
     shapes: usize,
+    inlined: usize,
+    /// Ids given out so far: a sanitised name that repeats gets a counter.
+    used_ids: std::collections::HashSet<String>,
 }
 
 /// Write the frame: `layers` in paint order (name, shapes), the theme `tokens` (name, colour),
@@ -83,7 +86,17 @@ pub fn write(
         }
         e.push_str(name);
     }
-    let mut w = Writer { out: String::new(), tokens: &by_colour, icons, viewport, skipped: Skipped::default(), clips: 0, shapes: 0 };
+    let mut w = Writer {
+        out: String::new(),
+        tokens: &by_colour,
+        icons,
+        viewport,
+        skipped: Skipped::default(),
+        clips: 0,
+        shapes: 0,
+        inlined: 0,
+        used_ids: std::collections::HashSet::new(),
+    };
     let (width, height) = (meta.window.x, meta.window.y);
     let _ = writeln!(
         w.out,
@@ -116,7 +129,8 @@ pub fn write(
     );
     w.out.push_str("<style>text{white-space:pre}</style>\n");
     for (name, shapes) in layers {
-        let _ = writeln!(w.out, "<g id=\"layer:{}\">", esc(name));
+        let id = w.unique_id(&format!("layer:{}", xml_id(name)));
+        let _ = writeln!(w.out, "<g id=\"{id}\" data-name=\"{}\">", esc(name));
         let mut clip: Option<Rect> = None;
         for s in shapes {
             if clip != Some(s.clip_rect) {
@@ -140,6 +154,18 @@ pub fn write(
 }
 
 impl Writer<'_> {
+    /// `base`, or `base-2`, `base-3`… when it was given out already (names that differ only in
+    /// characters an id cannot hold, such as ▲ and ▼, sanitise to the same id).
+    fn unique_id(&mut self, base: &str) -> String {
+        let mut id = base.to_string();
+        let mut n = 1;
+        while !self.used_ids.insert(id.clone()) {
+            n += 1;
+            id = format!("{base}-{n}");
+        }
+        id
+    }
+
     fn open_clip(&mut self, r: Rect) {
         self.clips += 1;
         let id = format!("clip{}", self.clips);
@@ -378,7 +404,9 @@ impl Writer<'_> {
                 let _ = write!(self.out, " opacity=\"{}\"", fmt(opacity));
             }
             self.out.push('>');
-            self.out.push_str(body.get(end_of_root + 1..).unwrap_or(""));
+            self.inlined += 1;
+            let inner = body.get(end_of_root + 1..).unwrap_or("");
+            self.out.push_str(&prefix_ids(inner, &format!("i{}-", self.inlined)));
             self.out.push('\n');
             return;
         }
@@ -431,9 +459,11 @@ impl Writer<'_> {
         match self.viewport {
             Some((r, png)) if *r == rect => {
                 let data = base64(png);
+                let id = self.unique_id("viewport");
                 let _ = writeln!(
                     self.out,
-                    "<image id=\"viewport\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" data-source=\"ui.render\" xlink:href=\"data:image/png;base64,{data}\"/>",
+                    "<image id=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" data-source=\"ui.render\" xlink:href=\"data:image/png;base64,{data}\"/>",
+                    id,
                     fmt(rect.min.x),
                     fmt(rect.min.y),
                     fmt(rect.width()),
@@ -442,9 +472,11 @@ impl Writer<'_> {
             }
             _ => {
                 self.skipped.callbacks += 1;
+                let id = self.unique_id("viewport");
                 let _ = writeln!(
                     self.out,
-                    "<rect id=\"viewport\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#d8dde3\" data-source=\"viewport (not rendered)\"/>",
+                    "<rect id=\"{}\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#d8dde3\" data-source=\"viewport (not rendered)\"/>",
+                    id,
                     fmt(rect.min.x),
                     fmt(rect.min.y),
                     fmt(rect.width()),
@@ -462,9 +494,11 @@ impl Writer<'_> {
             rects.insert(n, *r);
         }
         for (n, r) in rects {
+            let id = self.unique_id(&xml_id(n));
             let _ = writeln!(
                 self.out,
-                "<rect id=\"{}\" data-kind=\"rect\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"><title>{}</title></rect>",
+                "<rect id=\"{}\" data-name=\"{}\" data-kind=\"rect\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"><title>{}</title></rect>",
+                id,
                 esc(n),
                 fmt(r.min.x),
                 fmt(r.min.y),
@@ -478,9 +512,11 @@ impl Writer<'_> {
             handles.insert(n, *p);
         }
         for (n, p) in handles {
+            let id = self.unique_id(&format!("handle:{}", xml_id(n)));
             let _ = writeln!(
                 self.out,
-                "<circle id=\"handle:{}\" data-kind=\"handle\" cx=\"{}\" cy=\"{}\" r=\"3\"><title>{}</title></circle>",
+                "<circle id=\"{}\" data-name=\"{}\" data-kind=\"handle\" cx=\"{}\" cy=\"{}\" r=\"3\"><title>{}</title></circle>",
+                id,
                 esc(n),
                 fmt(p.x),
                 fmt(p.y),
@@ -489,6 +525,44 @@ impl Writer<'_> {
         }
         self.out.push_str("</g>\n");
     }
+}
+
+/// A legal XML id for a published name: letters, digits, `_`, `-`, `.` and `:` stay, anything
+/// else (spaces in "dialog:row:Hole Type") becomes `_`. The exact name is in `data-name`.
+fn xml_id(name: &str) -> String {
+    let mut id: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':') { c } else { '_' }).collect();
+    if !id.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') {
+        id.insert(0, '_');
+    }
+    id
+}
+
+/// An inlined master's own ids (masks, clips, gradients) made unique per instance: `id="x"`,
+/// `url(#x)` and `href="#x"` become `prefix` + x, so two copies of one icon do not share them.
+fn prefix_ids(svg: &str, prefix: &str) -> String {
+    let mut out = String::with_capacity(svg.len() + 64);
+    let mut rest = svg;
+    while let Some(i) = rest.find(['i', 'u', 'h']) {
+        let (before, at) = rest.split_at(i);
+        out.push_str(before);
+        let hit = [(" id=\"", " id=\"", ""), ("url(#", "url(#", ""), ("href=\"#", "href=\"#", "")].into_iter().find(|(pat, _, _)| {
+            at.starts_with(pat.trim_start()) && (!pat.starts_with(' ') || before.ends_with(' ') || before.ends_with('\n') || before.ends_with('\t'))
+        });
+        match hit {
+            Some((pat, lead, _)) => {
+                let pat = pat.trim_start();
+                out.push_str(lead.trim_start());
+                out.push_str(prefix);
+                rest = at.get(pat.len()..).unwrap_or("");
+            }
+            None => {
+                out.push_str(at.get(..1).unwrap_or(""));
+                rest = at.get(1..).unwrap_or("");
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn fmt(v: f32) -> String {
@@ -686,6 +760,14 @@ mod tests {
         assert!(svg.contains("data-icon=\""), "an icon is inlined with its master id");
         assert!(svg.contains("<g id=\"names\""), "the names group exists");
         assert!(svg.contains("id=\"handle:toolbar:solid.extrude\""), "toolbar buttons are named by command id");
+        assert!(svg.contains("data-name=\"dialog:row:Hole Type\"") || svg.contains("data-name=\"dialog:row:Distance\""), "exact names survive");
+        // Every id is a legal XML name and unique.
+        let mut ids: Vec<&str> = svg.match_indices("id=\"").map(|(i, _)| svg[i + 4..].split('"').next().unwrap_or("")).collect();
+        assert!(ids.iter().all(|id| !id.contains(' ')), "an id with a space: {:?}", ids.iter().find(|id| id.contains(' ')));
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "duplicate ids");
         assert!(svg.contains(">width<"), "the parameter's name is text: {}", svg.len());
         assert!(!svg.contains("<text x=\"NaN\""));
         // Without a path the SVG comes back inline.
@@ -712,5 +794,11 @@ mod tests {
         assert_eq!(base64(b"Man"), "TWFu");
         assert_eq!(base64(b"Ma"), "TWE=");
         assert_eq!(base64(b"M"), "TQ==");
+        assert_eq!(xml_id("dialog:row:Hole Type"), "dialog:row:Hole_Type");
+        assert_eq!(xml_id("1st"), "_1st");
+        assert_eq!(
+            prefix_ids(r##"<mask id="m"><rect/></mask><g mask="url(#m)" fill="#fff"><use href="#m"/><path id="p" d="M1 1"/></g>"##, "i7-"),
+            r##"<mask id="i7-m"><rect/></mask><g mask="url(#i7-m)" fill="#fff"><use href="#i7-m"/><path id="i7-p" d="M1 1"/></g>"##
+        );
     }
 }

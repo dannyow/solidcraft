@@ -123,6 +123,8 @@
   "Don't ask again": "不再询问",
   "Double-click to rename": "双击重命名",
   "Double-clicking the middle button in the view: Home (the home view, framing what is shown), Fit (frame what is shown, keeping the orientation) or nothing": "在视图中双击中键：主视图（主视图，框住所显示的内容）、适合窗口（框住所显示的内容，保持方向）或无动作",
+  "Drag to move the rest across the model. It snaps to sketch points on the face.": "拖动以在模型上移动垫块。它会吸附到面上的草图点。",
+  "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.": "拖动以 5° 为步长旋转垫块。按住 Alt 或 Ctrl 可自由旋转。",
   "Drive Joint": "驱动接头",
   "Duration": "时长",
   "Edges": "边",

@@ -123,6 +123,8 @@
   "Don't ask again": "Don't ask again",
   "Double-click to rename": "Double-click to rename",
   "Double-clicking the middle button in the view: Home (the home view, framing what is shown), Fit (frame what is shown, keeping the orientation) or nothing": "Double-clicking the middle button in the view: Home (the home view, framing what is shown), Fit (frame what is shown, keeping the orientation) or nothing",
+  "Drag to move the rest across the model. It snaps to sketch points on the face.": "Drag to move the rest across the model. It snaps to sketch points on the face.",
+  "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.": "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.",
   "Drive Joint": "Drive Joint",
   "Duration": "Duration",
   "Edges": "Edges",

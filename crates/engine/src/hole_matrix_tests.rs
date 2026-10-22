@@ -888,9 +888,10 @@ fn recessed_drill_point_through_and_exact_shoulder_keep_the_existing_exit() {
     }
 }
 
-/// A teardrop prints only across its apex: along it the hole is refused, as are an overhang the
-/// printer cannot do and a cap that would shorten the hole or miss the peak. Edited back to a
-/// plain hole, the teardrop is gone; saved and reopened, it is still a teardrop.
+/// A teardrop prints only across its apex: along it (within 10°) the hole stays round, with a
+/// warning; refused are an overhang the printer cannot do and a cap that would shorten the hole
+/// or miss the peak. Edited back to a plain hole, the teardrop is gone; saved and reopened, it is
+/// still a teardrop.
 #[test]
 fn a_teardrop_hole_is_refused_where_it_cannot_print() {
     let mut s = Session::default();
@@ -904,8 +905,23 @@ fn a_teardrop_hole_is_refused_where_it_cannot_print() {
         }
         p
     };
+    // Into the top face the hole runs along Z, the apex: round, with a warning. Tilted 5° it
+    // still counts as along; tilted 20° it is a teardrop.
+    let (v0, _) = measure(&mut s).unwrap();
+    for (what, dir, round) in [
+        ("straight down", [0.0f64, 0.0, -1.0], true),
+        ("tilted 5°", [0.0871557, 0.0, -0.9961947], true),
+        ("tilted 20°", [0.3420201, 0.0, -0.9396926], false),
+    ] {
+        let v = run(&mut s, "solid.hole", td(json!({"position": [20, 15, 20], "direction": dir, "name": "V"}))).unwrap();
+        let said = v["warning"].as_str().unwrap_or_default().contains("stays round");
+        assert_eq!(said, round, "{what}: warning {:?}", v["warning"]);
+        let got = v0 - measure(&mut s).unwrap().0;
+        let bore = cyl(3.0, 20.0 / dir[2].abs());
+        assert_eq!(got < bore * 1.03, round, "{what}: removed {got} against a plain bore of {bore}");
+        run(&mut s, "timeline.delete", json!({"feature": "V"})).unwrap();
+    }
     for (what, extra, says) in [
-        ("a hole along the apex", json!({"position": [20, 15, 20]}), "across"),
         ("a 0° overhang", json!({"angle": "0 deg"}), "between 0° and 90°"),
         ("a 90° overhang", json!({"angle": "90 deg"}), "between 0° and 90°"),
         ("a cap below the radius", json!({"cap": 2}), "at least the hole's radius"),
@@ -932,4 +948,118 @@ fn a_teardrop_hole_is_refused_where_it_cannot_print() {
     let doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
     let kind = doc.features.iter().find(|f| f.name == "H").map(|f| &f.kind).unwrap();
     assert!(matches!(kind, solidcraft_doc::FeatureKind::Hole { hole: solidcraft_doc::HoleKind::Teardrop { cap: None, .. }, .. }), "{kind:?}");
+}
+
+/// A Teardrop over a round hole made any other way: the bore keeps its diameter and depth and
+/// gets the peak. Through a plate it clears both rims; over a blind hole it stops at the floor,
+/// over a drilled one at the drill point. It refuses a shaft, a hole along the apex and a point
+/// off every round hole. Edited to a flat peak it is capped; reopened from JSON it is still a
+/// teardrop. Over a circle cut whose diameter is a parameter, it follows the parameter.
+#[test]
+fn a_teardrop_over_an_existing_hole_keeps_its_bore_and_follows_it() {
+    let fresh = || {
+        let mut s = Session::default();
+        for (id, p) in block() {
+            run(&mut s, id, p).unwrap();
+        }
+        let (v0, _) = measure(&mut s).unwrap();
+        (s, v0)
+    };
+    let slivers = |r: f64, cap: Option<f64>| teardrop(r, 45.0, cap) - PI * r * r;
+    let removed = |s: &mut Session, before: f64| before - measure(s).unwrap().0;
+
+    // Through the +x face (axis x, apex +Z): only the peak's slivers go, the whole length.
+    let (mut s, v0) = fresh();
+    run(&mut s, "solid.hole", hole(json!({"position": [40, 15, 10]}))).unwrap();
+    let (v1, _) = measure(&mut s).unwrap();
+    run(&mut s, "solid.teardrop", json!({"face": [30, 12, 10], "name": "T"})).unwrap();
+    assert!(close(removed(&mut s, v1), slivers(3.0, None) * 40.0, v0), "through: {}", removed(&mut s, v1));
+    assert!(!solid_at(&s, v3([20.0, 15.0, 13.8])) && solid_at(&s, v3([20.0, 15.0, 14.5])), "the peak reaches r / sin 45° = 4.24 above the centre");
+    assert!(!solid_at(&s, v3([20.0, 15.0, 10.0])) && solid_at(&s, v3([20.0, 15.0, 6.5])), "the bore is still open and the material below it stays");
+    // Edited to a flat peak 3 mm above the centre; saved and reopened, still a teardrop.
+    run(&mut s, "timeline.edit", json!({"feature": "T", "set": {"cap": "3 mm"}})).unwrap();
+    assert!(close(removed(&mut s, v1), slivers(3.0, Some(3.0)) * 40.0, v0), "capped: {}", removed(&mut s, v1));
+    let doc = solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap();
+    let kind = doc.features.iter().find(|f| f.name == "T").map(|f| &f.kind).unwrap();
+    assert!(matches!(kind, solidcraft_doc::FeatureKind::Teardrop { cap: Some(_), .. }), "{kind:?}");
+
+    // Blind with a flat bottom, 10 deep: the slivers stop short of the floor, which stays.
+    // Drilled (a 118° point): they run the cylindrical part only and the point stays.
+    for (what, kind, past) in [("blind", json!({}), [29.0, 15.0, 10.0]), ("drilled", json!({"type": "drilled"}), [28.5, 15.0, 10.0])] {
+        let (mut s, _) = fresh();
+        let mut h = hole(json!({"position": [40, 15, 10], "depth": 10}));
+        if let (Some(m), Some(x)) = (h.as_object_mut(), kind.as_object()) {
+            m.extend(x.clone());
+        }
+        run(&mut s, "solid.hole", h).unwrap();
+        let (v1, _) = measure(&mut s).unwrap();
+        run(&mut s, "solid.teardrop", json!({"face": [35, 12, 10], "name": "T"})).unwrap();
+        let got = removed(&mut s, v1);
+        let (lo, hi) = (slivers(3.0, None) * 9.5, slivers(3.0, None) * 10.0 + 0.1);
+        assert!(got > lo && got < hi, "{what}: {got} is not in {lo}..{hi}");
+        assert!(solid_at(&s, v3([29.8, 15.0, 13.5])) && !solid_at(&s, v3([30.5, 15.0, 13.5])), "{what}: the slivers stop just short of the bottom");
+        assert!(!solid_at(&s, v3([30.2, 15.0, 10.0])), "{what}: the bore is still open");
+        assert_eq!(solid_at(&s, v3(past)), what == "blind", "{what}: the floor stays, the drill point stays");
+    }
+
+    // Refused: a shaft and a point off every round hole; neither is kept. A hole along the apex
+    // is left as it is, with a warning; with the apex across it, it gets its teardrop.
+    let (mut s, _) = fresh();
+    run(&mut s, "solid.cylinder", json!({"radius": 5, "height": 20, "base": [60, 15, 0], "name": "Post"})).unwrap();
+    run(&mut s, "solid.hole", hole(json!({"position": [20, 15, 20]}))).unwrap();
+    for (what, p, says) in
+        [("a shaft", json!({"face": [65, 15, 10]}), "shaft"), ("a point in the air", json!({"face": [100, 100, 100]}), "no cylindrical face")]
+    {
+        let mut p = p;
+        p["name"] = json!("T");
+        let e = s.execute("solid.teardrop", &p).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(e.contains(says), "{what}: {e:?} should say {says:?}");
+        assert!(s.doc.features.iter().all(|f| f.name != "T"), "{what}: the refused teardrop is not kept");
+    }
+    let (v1, faces1) = measure(&mut s).unwrap();
+    for (what, apex) in [("the default apex", json!(null)), ("a given apex", json!([0, 0, -1]))] {
+        let mut p = json!({"face": [23, 15, 10], "name": "N"});
+        if !apex.is_null() {
+            p["apex"] = apex;
+        }
+        let v = run(&mut s, "solid.teardrop", p).unwrap();
+        assert!(v["warning"].as_str().unwrap_or_default().contains("nothing is cut"), "{what}: {:?}", v["warning"]);
+        assert_eq!(measure(&mut s).unwrap(), (v1, faces1), "{what}: the hole is as it was");
+        run(&mut s, "timeline.delete", json!({"feature": "N"})).unwrap();
+    }
+    let v = run(&mut s, "solid.teardrop", json!({"face": [23, 15, 10], "apex": [0, 1, 0], "name": "T"})).unwrap();
+    assert!(v["warning"].is_null(), "across the hole: {:?}", v["warning"]);
+    assert!(close(v1 - measure(&mut s).unwrap().0, slivers(3.0, None) * 20.0, v1), "across the hole: {}", v1 - measure(&mut s).unwrap().0);
+
+    // A circle cut from the YZ plane, its diameter the parameter `d` and its centre `y`: the
+    // teardrop over it follows both, with no complaint from the feature. The move (7 mm, past
+    // the nearest-face fallback's reach of 5 % of the body) is found by the face's history name,
+    // which the pick recorded.
+    let (mut s, v0) = fresh();
+    run(&mut s, "parameters.add", json!({"name": "d", "expression": "6 mm"})).unwrap();
+    run(&mut s, "parameters.add", json!({"name": "y", "expression": "15 mm"})).unwrap();
+    run(&mut s, "sketch.create", json!({"plane": "YZ", "name": "C"})).unwrap();
+    run(&mut s, "sketch.circle.center", json!({"center": [15, 10], "radius": 3, "id": "c"})).unwrap();
+    run(&mut s, "sketch.dimension", json!({"entities": ["c"], "type": "diameter", "value": "d"})).unwrap();
+    run(&mut s, "sketch.dimension", json!({"entities": ["origin", "c.center"], "type": "horizontal", "value": "y"})).unwrap();
+    run(&mut s, "sketch.dimension", json!({"entities": ["origin", "c.center"], "type": "vertical", "value": "10 mm"})).unwrap();
+    run(&mut s, "sketch.finish", json!({})).unwrap();
+    run(&mut s, "solid.extrude", json!({"sketch": "C", "distance": 40, "operation": "cut", "name": "Bore"})).unwrap();
+    let (v1, _) = measure(&mut s).unwrap();
+    assert!(close(v0 - v1, cyl(3.0, 40.0), v0), "the circle cut: {}", v0 - v1);
+    run(&mut s, "solid.teardrop", json!({"face": [20, 12, 10], "name": "T"})).unwrap();
+    assert!(close(removed(&mut s, v1), slivers(3.0, None) * 40.0, v0), "over the cut: {}", removed(&mut s, v1));
+    let t = s.doc.features.iter().find(|f| f.name == "T").cloned().unwrap();
+    assert!(t.face_names.iter().any(|n| !n.is_empty()), "the pick recorded the bore's history name: {:?}", t.face_names);
+    let fine = |s: &Session, what: &str| {
+        let r = s.model.result(t.id).cloned().unwrap();
+        assert!(r.error.is_none() && r.warning.is_none(), "{what}: {:?} {:?}", r.error, r.warning);
+    };
+    run(&mut s, "parameters.change", json!({"name": "d", "expression": "8 mm"})).unwrap();
+    fine(&s, "after the resize");
+    assert!(close(v0 - measure(&mut s).unwrap().0, teardrop(4.0, 45.0, None) * 40.0, v0), "a Ø8 teardrop: {}", v0 - measure(&mut s).unwrap().0);
+    run(&mut s, "parameters.change", json!({"name": "y", "expression": "22 mm"})).unwrap();
+    fine(&s, "after the move");
+    assert!(close(v0 - measure(&mut s).unwrap().0, teardrop(4.0, 45.0, None) * 40.0, v0), "moved to y = 22: {}", v0 - measure(&mut s).unwrap().0);
+    assert!(!solid_at(&s, v3([20.0, 22.0, 15.0])) && solid_at(&s, v3([20.0, 15.0, 10.0])), "the teardrop is at the new place, the old one is gone");
 }

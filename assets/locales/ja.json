@@ -152,6 +152,7 @@
   "Don't ask again": "今後確認しない",
   "Double-click to rename": "ダブルクリックで名前変更",
   "Double-clicking the middle button in the view: Home (the home view, framing what is shown), Fit (frame what is shown, keeping the orientation) or nothing": "ビュー上で中ボタンをダブルクリックした時の動作: ホーム（全体を収めたホームビュー）、全体表示（向きを維持して全体を収める）、または無効",
+  "Drag to move the boss across the model. It snaps to sketch points on the face.": "ドラッグしてボスをモデル上で移動します。面上のスケッチ点にスナップします。",
   "Drag to move the rest across the model. It snaps to sketch points on the face.": "ドラッグしてレストをモデル上で移動します。面上のスケッチ点にスナップします。",
   "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.": "ドラッグしてレストを 5° 刻みで回転します。Alt または Ctrl を押したままにすると自由に回転します。",
   "Drive Joint": "ジョイントを駆動",

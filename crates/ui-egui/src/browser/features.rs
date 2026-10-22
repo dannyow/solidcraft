@@ -133,6 +133,37 @@ mod tests {
     }
 
     #[test]
+    fn browser_feature_shift_click_selects_a_range_upward_and_downward() {
+        let mut h = Harness::new();
+        let ids: Vec<u64> = (0..5)
+            .map(|i| {
+                let body = format!("Box{i}");
+                h.app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":body})).unwrap()["feature"].as_u64().unwrap()
+            })
+            .collect();
+        h.app.tree.expanded.insert("c0/features".into());
+        h.frames(2);
+        let click = |h: &mut Harness, id: u64, shift: bool| {
+            let at = crate::scenario::handle_at(&format!("row:browser-feature:c0:{id}")).unwrap();
+            h.call("ui.click", json!({"x": at.x, "y": at.y, "shift": shift}));
+            h.frames(2);
+        };
+        let all: Vec<Sel> = ids.iter().map(|&id| Sel::Feature { id }).collect();
+        for (from, to) in [(ids[0], ids[4]), (ids[4], ids[0]), (ids[3], ids[1])] {
+            click(&mut h, from, false);
+            assert_eq!(h.app.session.selection, [Sel::Feature { id: from }]);
+            click(&mut h, to, true);
+            let mut got = h.app.session.selection.clone();
+            got.sort_by_key(|s| match s {
+                Sel::Feature { id } => *id,
+                _ => u64::MAX,
+            });
+            let (lo, hi) = (ids.iter().position(|&i| i == from.min(to)).unwrap(), ids.iter().position(|&i| i == from.max(to)).unwrap());
+            assert_eq!(got, all[lo..=hi], "click {from}, Shift+click {to}");
+        }
+    }
+
+    #[test]
     fn browser_feature_mixed_history_filters_sketches_with_current_missing_and_stale_cache() {
         let mut h = Harness::new();
         h.app.run("sketch.create", json!({"plane":"XY","name":"Profile"})).unwrap();

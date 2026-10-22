@@ -104,6 +104,9 @@ pub struct TreeState {
     anchor: Option<String>,
     /// Row keys in drawing order this frame (for Shift ranges).
     order: Vec<String>,
+    /// Every row key of the last frame: a click is handled while this frame's rows are still
+    /// being drawn, so an anchor below the clicked row is only found here.
+    last_order: Vec<String>,
 }
 
 /// Moving an occurrence: the offsets typed so far (pending until Capture Position).
@@ -478,8 +481,9 @@ fn click_select(app: &mut SolveApp, ui: &egui::Ui, key: String, sel: Option<Sel>
     if mods.shift
         && let Some(a) = app.tree.anchor.clone()
     {
-        let order = app.tree.order.clone();
-        if let (Some(i), Some(j)) = (order.iter().position(|k| *k == a), order.iter().position(|k| *k == key)) {
+        let span = |order: &[String]| Some((order.iter().position(|k| *k == a)?, order.iter().position(|k| *k == key)?));
+        let found = span(&app.tree.last_order).map(|ij| (ij, &app.tree.last_order)).or_else(|| span(&app.tree.order).map(|ij| (ij, &app.tree.order)));
+        if let Some(((i, j), order)) = found {
             let (lo, hi) = (i.min(j), i.max(j));
             let items: Vec<Sel> = order[lo..=hi].iter().filter_map(|k| sel_of_key(k)).collect();
             let _ = app.run("select.set", json!({ "items": items, "add": mods.command || mods.ctrl }));
@@ -693,7 +697,7 @@ pub(crate) fn resize_column(app: &mut SolveApp, ui: &egui::Ui, rect: Rect, width
 pub fn browser(app: &mut SolveApp, ui: &mut egui::Ui) {
     let available = ui.available_rect_before_wrap();
     let t = Tokens::get();
-    app.tree.order.clear();
+    app.tree.last_order = std::mem::take(&mut app.tree.order);
     DRAWN.with(|d| d.borrow_mut().clear());
     OCCURRENCES.with(|d| d.borrow_mut().clear());
     let mut acts = Actions::default();

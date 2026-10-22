@@ -35,6 +35,9 @@ pub struct Meta {
     pub pixels_per_point: f32,
     pub window: egui::Vec2,
     pub dialog: Option<String>,
+    /// The interface font chosen in Preferences (empty: the built-in IBM Plex Sans). When set, it
+    /// is what the app painted the text with, so it leads every `font-family`.
+    pub ui_font: String,
 }
 
 /// What a frame published for the harness: rects and handles by name (the latest of a name wins).
@@ -57,6 +60,7 @@ pub struct Skipped {
 
 struct Writer<'a> {
     out: String,
+    ui_font: &'a str,
     tokens: &'a BTreeMap<[u8; 4], String>,
     icons: &'a IconSources,
     viewport: Option<&'a (Rect, Vec<u8>)>,
@@ -88,6 +92,7 @@ pub fn write(
     }
     let mut w = Writer {
         out: String::new(),
+        ui_font: meta.ui_font.trim(),
         tokens: &by_colour,
         icons,
         viewport,
@@ -102,7 +107,7 @@ pub fn write(
         w.out,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" \
          data-app=\"SolidCraft\" data-version=\"{}\" data-commit=\"{}\" data-theme=\"{}\" data-dark=\"{}\" data-language=\"{}\" \
-         data-ui-scale=\"{}\" data-pixels-per-point=\"{}\" data-dialog=\"{}\" data-exported=\"{}\">",
+         data-ui-scale=\"{}\" data-pixels-per-point=\"{}\" data-dialog=\"{}\" data-ui-font=\"{}\" data-exported=\"{}\">",
         fmt(width),
         fmt(height),
         fmt(width),
@@ -115,6 +120,7 @@ pub fn write(
         fmt(meta.ui_scale),
         fmt(meta.pixels_per_point),
         esc(meta.dialog.as_deref().unwrap_or("")),
+        esc(&meta.ui_font),
         esc(&now_utc()),
     );
     let _ = writeln!(
@@ -339,6 +345,11 @@ impl Writer<'_> {
             },
             _ => ("IBM Plex Sans, sans-serif", 400, "plex-sans".to_string()),
         };
+        // A chosen interface font replaces the sans families (fonts.rs `with_ui_font`), not the mono one.
+        let family = match (self.ui_font.is_empty(), format.map(|f| &f.font_id.family)) {
+            (false, Some(egui::FontFamily::Monospace)) | (true, _) => family.to_string(),
+            (false, _) => format!("{}, {}", self.ui_font, family),
+        };
         let size = format.map_or(12.0, |f| f.font_id.size);
         let mut colour = t.override_text_color.unwrap_or_else(|| match format {
             Some(f) if f.color != Color32::PLACEHOLDER => f.color,
@@ -368,7 +379,7 @@ impl Writer<'_> {
                 "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-weight=\"{}\" font-size=\"{}\" {} data-font=\"{}\"{}{}>{}</text>",
                 fmt(x),
                 fmt(y),
-                esc(family),
+                esc(&family),
                 weight,
                 fmt(size),
                 self.fill(colour),
@@ -679,6 +690,7 @@ pub(crate) fn export_live(app: &mut SolveApp, ctx: &egui::Context, path: Option<
         pixels_per_point: ppp,
         window: ctx.content_rect().size(),
         dialog: app.dialog.as_ref().and_then(|d| crate::dialogs::command_of(&d.kind)).map(str::to_string),
+        ui_font: app.preferences.ui_font.clone(),
     };
     let (svg, skipped, shapes) = write(&layers, &names, &meta, &tokens, &icons, viewport.as_ref());
     let mut result = json!({
@@ -756,6 +768,8 @@ mod tests {
         assert!(svg.contains("<g id=\"layer:"), "layers are groups");
         assert!(svg.contains("data-token=\""), "a fill is traced to a theme token");
         assert!(svg.contains("data-font=\"plex-sans\"") || svg.contains("data-font=\"ui-medium\""), "text names its font family");
+        assert!(svg.contains("font-family=\"IBM Plex Sans, sans-serif\""), "the built-in font leads font-family");
+        assert!(svg.contains("data-ui-font=\"\""), "no interface font chosen");
         assert!(svg.contains("data-i18n=\""), "a catalog message is traced to its id");
         assert!(svg.contains("data-icon=\""), "an icon is inlined with its master id");
         assert!(svg.contains("<g id=\"names\""), "the names group exists");
@@ -773,6 +787,23 @@ mod tests {
         // Without a path the SVG comes back inline.
         let inline = h.call("ui.export_svg", json!({}));
         assert!(inline["result"]["svg"].as_str().is_some_and(|s| s.starts_with("<svg ")));
+    }
+
+    /// With an interface font chosen in Preferences the app paints the sans text with it, so it
+    /// leads every sans `font-family` (never the mono one) and is named on the root.
+    #[test]
+    fn a_chosen_interface_font_leads_the_font_family() {
+        let mut h = Harness::new();
+        h.app.preferences.ui_font = "Example Sans".into();
+        h.step(&json!({"start": "solid.extrude"})).unwrap();
+        h.frames(2);
+        let path = h.dir.join("font.svg");
+        assert_eq!(h.call("ui.export_svg", json!({"path": path.to_string_lossy()}))["ok"], true);
+        let svg = std::fs::read_to_string(&path).unwrap();
+        assert!(svg.contains("data-ui-font=\"Example Sans\""), "the root names the chosen font");
+        assert!(svg.contains("font-family=\"Example Sans, IBM Plex Sans, sans-serif\""), "the chosen font leads the sans text");
+        assert!(!svg.contains("font-family=\"IBM Plex Sans, sans-serif\""), "no sans text keeps the built-in font first");
+        assert!(!svg.contains("font-family=\"Example Sans, IBM Plex Mono"), "mono text is untouched");
     }
 
     #[test]

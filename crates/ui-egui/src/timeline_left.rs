@@ -5,7 +5,9 @@ use egui::{Rect, Sense, Stroke, pos2, vec2};
 use serde_json::json;
 
 use crate::theme::Tokens;
-use crate::timeline::{TimelineKind, clipboard_buttons, delete_feature, delete_features, icon_of, message_button, selected_feature_ids};
+use crate::timeline::{
+    TimelineKind, clipboard_buttons, delete_after_marker_button, delete_feature, delete_features, icon_of, message_button, selected_feature_ids,
+};
 use crate::{SolveApp, icons};
 
 const FOLDER_INDENT: f32 = 14.0;
@@ -51,7 +53,7 @@ impl TimelineItem {
     fn key(self) -> String {
         match self {
             TimelineItem::Group(id) => format!("g:{id}"),
-            TimelineItem::Feature(id) => format!("f:{id}"),
+            TimelineItem::Feature(id) => crate::timeline::anchor_key(id),
         }
     }
 }
@@ -1088,6 +1090,7 @@ fn vertical_features(app: &mut SolveApp, ui: &mut egui::Ui, names: bool) {
                 delete_feature(app, *id);
                 ui.close();
             }
+            delete_after_marker_button(app, ui, *id, index, marker);
         });
         if names && has_patterns && patterns_open {
             let depth = group_id.map_or(1, |group| group_depth(&groups, group) + 2);

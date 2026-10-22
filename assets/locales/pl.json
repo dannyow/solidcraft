@@ -120,6 +120,8 @@
   "Double-clicking the middle button in the view: Home (the home view, framing what is shown), Fit (frame what is shown, keeping the orientation) or nothing": "Dwukrotne kliknięcie środkowym przyciskiem w widoku: Widok główny (kadruje to, co widoczne), Dopasuj (kadruje to, co widoczne, zachowując orientację) lub nic",
   "Drag to move the boss across the model. It snaps to sketch points on the face.": "Przeciągnij, aby przesunąć występ po modelu. Przyciąga się do punktów szkicu na ścianie.",
   "Drag to move the rest across the model. It snaps to sketch points on the face.": "Przeciągnij, aby przesunąć podparcie po modelu. Przyciąga się do punktów szkicu na ścianie.",
+  "Drag to move the snap fit across the model. It snaps to sketch points on the face.": "Przeciągnij, aby przesunąć zatrzask po modelu. Przyciąga się do punktów szkicu na ścianie.",
+  "Drag to point the catch in another direction.": "Przeciągnij, aby skierować zaczep w inną stronę.",
   "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.": "Przeciągnij, aby obrócić podparcie co 5°. Przytrzymaj Alt lub Ctrl, aby obracać swobodnie.",
   "Drive Joint": "Steruj złączem",
   "Duration": "Czas trwania",

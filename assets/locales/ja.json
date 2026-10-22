@@ -126,6 +126,7 @@
   "Drag to move the boss across the model. It snaps to sketch points on the face.": "ドラッグしてボスをモデル上で移動します。面上のスケッチ点にスナップします。",
   "Drag to move the rest across the model. It snaps to sketch points on the face.": "ドラッグしてレストをモデル上で移動します。面上のスケッチ点にスナップします。",
   "Drag to move the snap fit across the model. It snaps to sketch points on the face.": "ドラッグしてスナップ フィットをモデル上で移動します。面上のスケッチ点にスナップします。",
+  "Drag to place it on another face.": "ドラッグして別の面に配置します。",
   "Drag to point the catch in another direction.": "ドラッグしてキャッチの向きを変えます。",
   "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.": "ドラッグしてレストを 5° 刻みで回転します。Alt または Ctrl を押したままにすると自由に回転します。",
   "Drive Joint": "ジョイントを駆動",

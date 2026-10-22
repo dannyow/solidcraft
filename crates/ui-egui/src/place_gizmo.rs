@@ -15,6 +15,7 @@
 //! `<name>:rotate` for `ui.handles`.
 
 mod boss;
+mod primitive;
 mod rest;
 mod snap_fit;
 
@@ -67,6 +68,7 @@ pub(crate) struct Turn {
 #[rustfmt::skip]
 static TOOLS: &[&Spec] = &[
     &boss::SPEC,
+    &primitive::SPEC,
     &rest::SPEC,
     &snap_fit::SPEC,
 ];

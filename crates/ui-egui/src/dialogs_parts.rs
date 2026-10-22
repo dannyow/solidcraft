@@ -6,6 +6,7 @@
 use crate::ui_kit::{choice_row, text_row};
 use egui::vec2;
 use serde_json::{Value, json};
+use solidcraft_engine::geom::Vec3;
 use solidcraft_engine::{Sel, Session};
 
 use crate::SolveApp;
@@ -61,13 +62,17 @@ pub struct Pt {
     pub picture: Option<(usize, usize, Option<usize>)>,
     /// The library, read once.
     pub lib: Option<Vec<Family>>,
+    /// A free place with no hole picked: a point on a face and the face's normal, the part's
+    /// seating plane on the face and its shank into it, with no joint (set by the placement
+    /// handle). `None`: the origin, standing up.
+    pub place: Option<(Vec3, Vec3)>,
 }
 
 /// The dialog for Insert Part.
 pub fn start(_app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
     matches!(id, "parts.fastener" | "parts.insert").then(|| {
         (
-            Kind::Part(Pt { family: 0, size: 0, length: None, name: String::new(), picture: None, lib: None }),
+            Kind::Part(Pt { family: 0, size: 0, length: None, name: String::new(), picture: None, lib: None, place: None }),
             vec![SelInput::new("Hole (optional)", FACES | EDGES, false)],
         )
     })
@@ -88,8 +93,9 @@ pub fn insert_params(lib: &[Family], k: &Pt, hole: Option<&Sel>) -> Result<Value
     match hole {
         Some(Sel::Face { point, .. } | Sel::Edge { point, .. }) => p["at"] = json!([point.x, point.y, point.z]),
         _ => {
-            p["point"] = json!([0.0, 0.0, 0.0]);
-            p["direction"] = json!([0.0, 0.0, 1.0]);
+            let (at, up) = k.place.unwrap_or((Vec3::ZERO, Vec3::Z));
+            p["point"] = json!([at.x, at.y, at.z]);
+            p["direction"] = json!([up.x, up.y, up.z]);
         }
     }
     if !k.name.trim().is_empty() {
@@ -188,7 +194,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Pt, inputs: &[SelInpu
             });
         }
     }
-    if inputs.first().is_some_and(|i| i.items.is_empty()) {
+    if k.place.is_none() && inputs.first().is_some_and(|i| i.items.is_empty()) {
         ui.vertical(|ui| {
             crate::ui_kit::text(
                 ui,
@@ -215,7 +221,6 @@ pub fn commands(app: &SolveApp, k: &Pt, inputs: &[SelInput]) -> Result<Vec<(Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use solidcraft_engine::geom::Vec3;
 
     fn lib() -> Vec<Family> {
         families(&json!({"families": [
@@ -238,11 +243,11 @@ mod tests {
     #[test]
     fn insert_params_for_picks() {
         let l = lib();
-        let k = Pt { family: 0, size: 1, length: Some(2), name: String::new(), picture: None, lib: None };
+        let k = Pt { family: 0, size: 1, length: Some(2), name: String::new(), picture: None, lib: None, place: None };
         let hole = Sel::Face { body: "Body1".into(), index: 3, point: Vec3::new(5.0, 0.0, 10.0) };
         let p = insert_params(&l, &k, Some(&hole)).unwrap();
         assert_eq!(p, json!({"family": "socket_head_cap_screw", "size": "M6", "length": 20.0, "at": [5.0, 0.0, 10.0]}));
-        let k = Pt { family: 1, size: 0, length: None, name: "Front bearing".into(), picture: None, lib: None };
+        let k = Pt { family: 1, size: 0, length: None, name: "Front bearing".into(), picture: None, lib: None, place: None };
         let p = insert_params(&l, &k, None).unwrap();
         assert_eq!(p["point"], json!([0.0, 0.0, 0.0]));
         assert_eq!(p["name"], "Front bearing");

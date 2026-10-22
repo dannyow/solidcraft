@@ -122,6 +122,7 @@
   "Drag to move the rest across the model. It snaps to sketch points on the face.": "Przeciągnij, aby przesunąć podparcie po modelu. Przyciąga się do punktów szkicu na ścianie.",
   "Drag to move the snap fit across the model. It snaps to sketch points on the face.": "Przeciągnij, aby przesunąć zatrzask po modelu. Przyciąga się do punktów szkicu na ścianie.",
   "Drag to place it on another face.": "Przeciągnij, aby umieścić go na innej ścianie.",
+  "Drag to place the part on a face, or onto a hole's wall to seat it there.": "Przeciągnij, aby postawić część na ścianie albo na ściance otworu, aby ją w nim osadzić.",
   "Drag to point the catch in another direction.": "Przeciągnij, aby skierować zaczep w inną stronę.",
   "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.": "Przeciągnij, aby obrócić podparcie co 5°. Przytrzymaj Alt lub Ctrl, aby obracać swobodnie.",
   "Drive Joint": "Steruj złączem",

@@ -127,6 +127,7 @@
   "Drag to move the rest across the model. It snaps to sketch points on the face.": "Drag to move the rest across the model. It snaps to sketch points on the face.",
   "Drag to move the snap fit across the model. It snaps to sketch points on the face.": "Drag to move the snap fit across the model. It snaps to sketch points on the face.",
   "Drag to place it on another face.": "Drag to place it on another face.",
+  "Drag to place the part on a face, or onto a hole's wall to seat it there.": "Drag to place the part on a face, or onto a hole's wall to seat it there.",
   "Drag to point the catch in another direction.": "Drag to point the catch in another direction.",
   "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.": "Drag to turn the rest in 5° steps. Hold Alt or Ctrl to turn it freely.",
   "Drive Joint": "Drive Joint",

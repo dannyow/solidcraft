@@ -1163,6 +1163,20 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         single_face_selection: bool,
     },
+    /// A teardrop cut over an existing round hole (the cylindrical face at `face`), for a hole
+    /// printed across the build direction: the bore keeps its diameter and gets a peak towards
+    /// `apex` (the printer's up) whose walls overhang no steeper than `angle`; `cap` cuts the peak
+    /// flat that far above the hole's centre (pointed when absent). The same cross-section as
+    /// [`HoleKind::Teardrop`], over a hole made any other way (a cut, an import, a pattern).
+    Teardrop {
+        face: FacePick,
+        apex: Dir,
+        #[walk(angle = "Overhang angle")]
+        angle: Expr,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[walk(length = "Cap height")]
+        cap: Option<Expr>,
+    },
     /// Ruled loft through profiles of several sketches, in order.
     Loft {
         sections: Vec<LoftSection>,
@@ -3008,6 +3022,7 @@ impl FeatureKind {
             FeatureKind::ConstructionPlane { .. } => "ConstructionPlane",
             FeatureKind::Hole { .. } => "HoleFeature",
             FeatureKind::Thread { .. } => "ThreadFeature",
+            FeatureKind::Teardrop { .. } => "TeardropFeature",
             FeatureKind::Loft { .. } => "LoftFeature",
             FeatureKind::Sweep { .. } => "SweepFeature",
             FeatureKind::Shell { .. } => "ShellFeature",
@@ -3093,6 +3108,7 @@ impl FeatureKind {
             FeatureKind::Mirror { .. } => "mirror",
             FeatureKind::Hole { .. } => "hole",
             FeatureKind::Thread { .. } => "thread",
+            FeatureKind::Teardrop { .. } => "teardrop",
             FeatureKind::Loft { .. } => "loft",
             FeatureKind::Sweep { .. } => "sweep",
             FeatureKind::Shell { .. } => "shell",
@@ -3263,6 +3279,7 @@ impl FeatureKind {
             FeatureKind::ConstructionPlane { .. } => "Plane",
             FeatureKind::Hole { .. } => "Hole",
             FeatureKind::Thread { .. } => "Thread",
+            FeatureKind::Teardrop { .. } => "Teardrop",
             FeatureKind::Loft { .. } => "Loft",
             FeatureKind::Sweep { .. } => "Sweep",
             FeatureKind::Shell { .. } => "Shell",

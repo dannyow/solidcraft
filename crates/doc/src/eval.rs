@@ -6690,6 +6690,7 @@ fn hole_feature_tools(
     vals: &BTreeMap<String, Value>,
     st: &ModelState,
     f: &Feature,
+    warning: &mut Option<String>,
 ) -> Result<Vec<(Traced, Option<more::PrimitivePrism>)>> {
     let FeatureKind::Hole { diameter, depth, hole, to, .. } = &f.kind else { return Err(DocError::Invalid("not a hole".into())) };
     // A hole at sketch points is drilled in its sketch's frame: the bodies it cuts are met where
@@ -6705,7 +6706,7 @@ fn hole_feature_tools(
     let mut tools = Vec::new();
     for at in spots {
         let depth = hole_depth_to(st, &at, dir, &to.map(Vec3::from), depth)?;
-        tools.extend(hole_tools_and_prisms(vals, st, &at, dir, diameter, &depth, hole, kept_inside)?);
+        tools.extend(hole_tools_and_prisms(vals, st, &at, dir, diameter, &depth, hole, kept_inside, warning)?);
     }
     Ok(tools)
 }
@@ -6925,9 +6926,10 @@ fn hole_tools_and_prisms(
     depth: &Option<crate::Expr>,
     hole: &HoleKind,
     kept_inside: bool,
+    warning: &mut Option<String>,
 ) -> Result<Vec<(Traced, Option<more::PrimitivePrism>)>> {
     let reach = hole_reach(vals, st, position, dir, diameter, depth, hole, kept_inside)?;
-    hole_tools_reaching(vals, st, position, dir, diameter, depth, hole, &reach)
+    hole_tools_reaching(vals, st, position, dir, diameter, depth, hole, &reach, warning)
 }
 
 /// What a hole's tools at one spot take from the model there, not from the hole's numbers: the
@@ -7039,6 +7041,7 @@ fn hole_tools_reaching(
     depth: &Option<crate::Expr>,
     hole: &HoleKind,
     reach: &HoleReach,
+    warning: &mut Option<String>,
 ) -> Result<Vec<(Traced, Option<more::PrimitivePrism>)>> {
     #[cfg(test)]
     cost_tests::count(|c| c.hole_tools += 1);
@@ -7148,10 +7151,12 @@ fn hole_tools_reaching(
             let ang = val(vals, angle, Kind::Angle)?;
             let cap = cap.as_ref().map(|c| val(vals, c, Kind::Length)).transpose()?;
             // The apex in the tool plane: the printer's up, less its part along the hole's axis.
-            let up = plane
-                .to_local(*position + apex.0)
-                .normalized()
-                .ok_or_else(|| DocError::Invalid("a hole along the build direction prints round; a teardrop needs a hole across it".into()))?;
+            // A hole along it prints round whatever its shape, so it stays a plain bore.
+            let Some(up) = teardrop_up(&plane, apex.0) else {
+                append_warning(warning, "the hole runs along the apex (the printer's up): it prints round, so it stays round".into());
+                tools.push(cyl(r, bottom, top, "bore")?);
+                return Ok(tools);
+            };
             let region = Region2 { outer: teardrop_loop(r, ang, cap, up)?, holes: vec![] };
             let tool = kernel::extrude(&plane, &[region], bottom, top)?.pop().ok_or_else(|| DocError::Invalid("hole tool".into()))?;
             tools.push((crate::lineage::part_tool(tool, "bore"), None));
@@ -7242,7 +7247,8 @@ pub fn teardrop_loop(r: f64, ang: f64, cap: Option<f64>, up: Vec2) -> Result<sol
     let peak = r / ang.sin();
     let cap = match cap {
         Some(c) if c >= peak - 1e-9 => return Err(DocError::Invalid(format!("the cap must be below the peak ({:.3} mm above the centre)", peak))),
-        Some(c) if c < r => return Err(DocError::Invalid("the cap must be at least the hole's radius above the centre".into())),
+        // A fitted radius (a teardrop over an existing bore) is a hair off: at the radius is fine.
+        Some(c) if c < r - 1e-6 => return Err(DocError::Invalid("the cap must be at least the hole's radius above the centre".into())),
         c => c,
     };
     // Local frame: `up` is +y, `right` is +x.
@@ -7265,6 +7271,70 @@ pub fn teardrop_loop(r: f64, ang: f64, cap: Option<f64>, up: Vec2) -> Result<sol
         }
     }
     Ok(solidcore_record::Loop2 { segs })
+}
+
+/// The teardrop's apex (the printer's up) in the plane across a hole: `None` when the hole runs
+/// along it, within [`TEARDROP_ALONG`], and so prints round whatever its cross-section.
+fn teardrop_up(plane: &Plane, apex: Vec3) -> Option<Vec2> {
+    let up = plane.to_local(plane.origin + apex);
+    if up.len() < TEARDROP_ALONG.to_radians().sin() { None } else { up.normalized() }
+}
+
+/// A hole whose axis is within this many degrees of the apex counts as running along it.
+pub const TEARDROP_ALONG: f64 = 10.0;
+
+/// The axis of the round hole whose wall is at `p`, for a dialog that wants to know whether a
+/// teardrop's apex runs along it before the feature exists. `None` off every cylindrical face.
+pub fn hole_axis_at(st: &ModelState, p: Vec3) -> Option<Vec3> {
+    let dist = |c: &kernel::CylinderFace| ((p - c.axis_point - c.axis * (p - c.axis_point).dot(c.axis)).len() - c.radius).abs();
+    st.bodies.iter().filter_map(|b| kernel::cylinder_face_at(&b.body, p)).min_by(|a, b| dist(a).total_cmp(&dist(b))).map(|c| *c.axis)
+}
+
+/// The cutting tool of a Teardrop feature, and the body it is cut from: the teardrop prism over
+/// the round hole whose wall is at `p`, with the bore's own radius and axis, run the length of
+/// the cylindrical face. Past an open end the prism clears the rim; at a floor (a blind hole's
+/// bottom, a drill point) it stops, so the hole keeps its depth.
+fn teardrop_face_tool(
+    vals: &BTreeMap<String, Value>,
+    st: &ModelState,
+    p: Vec3,
+    apex: Vec3,
+    angle: &str,
+    cap: Option<&str>,
+) -> Result<(String, Option<Traced>)> {
+    let dist = |c: &kernel::CylinderFace| ((p - c.axis_point - c.axis * (p - c.axis_point).dot(c.axis)).len() - c.radius).abs();
+    let (mb, cyl) = st
+        .bodies
+        .iter()
+        .filter_map(|b| kernel::cylinder_face_at(&b.body, p).map(|c| (b, c)))
+        .min_by(|a, b| dist(&a.1).total_cmp(&dist(&b.1)))
+        .ok_or_else(|| DocError::Invalid("no cylindrical face there: a teardrop needs a round hole".into()))?;
+    if !cyl.internal {
+        return Err(DocError::Invalid("that face is a shaft, not a hole: a teardrop needs the material around a hole".into()));
+    }
+    let ang = val(vals, angle, Kind::Angle)?;
+    let cap = cap.map(|c| val(vals, c, Kind::Length)).transpose()?;
+    let plane = Plane::from_normal(cyl.axis_point, *cyl.axis).ok_or_else(|| DocError::Invalid("hole axis".into()))?;
+    // The apex in the plane across the hole: the printer's up, less its part along the axis.
+    let Some(up) = teardrop_up(&plane, apex) else { return Ok((mb.name.clone(), None)) };
+    let region = Region2 { outer: teardrop_loop(cyl.radius, ang, cap, up)?, holes: vec![] };
+    // An end is open when the material the teardrop takes (just outside the bore, towards the
+    // apex) is already air past it; a floor or a drill point is solid there. The prism stops a
+    // quarter millimetre (under a print layer) short of a floor: the kernel finds no result for
+    // a cut that ends on a drill point or within 0.2 mm of it.
+    let over = (mb.body.size() * 0.01).max(0.1);
+    let shy = (mb.body.size() * 5e-3).max(0.25);
+    let probe = plane.dir_to_world(up) * (cyl.radius * 1.05);
+    let open = |end: f64, out: f64| -> Result<bool> {
+        Ok(mb.body.classify_point(cyl.axis_point + cyl.axis * (end + out * over) + probe)? == kernel::PointClass::Outside)
+    };
+    let lo = if open(cyl.start, -1.0)? { cyl.start - over } else { cyl.start + shy };
+    let hi = if open(cyl.end, 1.0)? { cyl.end + over } else { cyl.end - shy };
+    if !(hi > lo) {
+        return Err(DocError::Invalid("the hole is too short for a teardrop".into()));
+    }
+    let tool = kernel::extrude(&plane, &[region], lo, hi)?.pop().ok_or_else(|| DocError::Invalid("teardrop tool".into()))?;
+    Ok((mb.name.clone(), Some(crate::lineage::part_tool(tool, "bore"))))
 }
 
 /// The angular interval used by both the solid and its interactive extent handles.
@@ -8187,7 +8257,7 @@ fn feature_tools_with_constructor(
             val(vals, top_radius, Kind::Length)?,
             val(vals, height, Kind::Length)?,
         )?]),
-        FeatureKind::Hole { .. } => Ok(hole_feature_tools(doc, vals, st, f)?.into_iter().map(|(tool, _)| tool).collect()),
+        FeatureKind::Hole { .. } => Ok(hole_feature_tools(doc, vals, st, f, &mut None)?.into_iter().map(|(tool, _)| tool).collect()),
         _ => Err(DocError::Invalid(format!("{} cannot be patterned or mirrored yet", f.name))),
     }
 }
@@ -9754,8 +9824,10 @@ fn replay(
                                 .collect::<Result<Vec<_>>>()?
                         }
                         None => {
-                            let tools: Vec<Traced> =
-                                hole_tools_reaching(vals, st, &at, d, diameter, &depth, hole, &reach)?.into_iter().map(|(tool, _)| tool).collect();
+                            let tools: Vec<Traced> = hole_tools_reaching(vals, st, &at, d, diameter, &depth, hole, &reach, &mut None)?
+                                .into_iter()
+                                .map(|(tool, _)| tool)
+                                .collect();
                             if movable {
                                 built = Some(HoleBuilt { at, dir: d, depth: depth.clone(), reach, tools: tools.clone() });
                             }
@@ -10841,7 +10913,7 @@ fn eval_feature_kind(
             } else {
                 Vec::new()
             };
-            let tools = hole_feature_tools(doc, vals, st, f)?;
+            let tools = hole_feature_tools(doc, vals, st, f, warning)?;
             let handled = sheet_hole_cut(st, f, &tools, warning)?;
             let tools: Vec<Traced> = tools.into_iter().map(|(tool, _)| tool).collect();
             if handled.is_empty() {
@@ -10952,6 +11024,16 @@ fn eval_feature_kind(
             Ok(())
         }
         FeatureKind::Thread { .. } => thread::eval(doc, vals, f, st, warning),
+        FeatureKind::Teardrop { face, apex, angle, cap } => {
+            let (body, tool) = teardrop_face_tool(vals, st, face.0, apex.0, angle, cap.as_deref())?;
+            match tool {
+                Some(tool) => apply_traced(doc, st, f, vec![tool], Operation::Cut, &[body]),
+                None => {
+                    append_warning(warning, "the hole runs along the apex (the printer's up): it prints round, so nothing is cut".into());
+                    Ok(())
+                }
+            }
+        }
         FeatureKind::Shell { faces, thickness, body, direction, tangent_chain } => {
             let t = val(vals, thickness, Kind::Length)?;
             // No face opened (a closed hollow body) picks no body: the one there is, or the named one.

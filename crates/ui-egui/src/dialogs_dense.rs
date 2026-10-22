@@ -43,6 +43,7 @@ pub(super) fn command(kind: &Kind) -> Option<&'static str> {
         Kind::DeleteFaces => Some("face.delete"),
         Kind::Move { .. } => Some("solid.move"),
         Kind::Thread { .. } => Some("solid.thread"),
+        Kind::Teardrop { .. } => Some("solid.teardrop"),
         Kind::ReplaceFace => Some("solid.replace_face"),
         Kind::BoundaryFill { .. } => Some("solid.boundary_fill"),
         Kind::Align { .. } => Some("solid.align"),
@@ -536,13 +537,11 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
                 enter |= expr_row(ui, "Countersink angle", cs_angle);
             }
             if *kind == 3 {
-                choice_row(ui, "Apex", "hole_apex", td_apex, &crate::dialogs::APEX_LABELS);
-                enter |= expr_row(ui, "Overhang angle", td_angle);
-                choice_row(ui, "Peak", "hole_peak", td_peak, &crate::dialogs::PEAK_LABELS);
-                if *td_peak == 1 {
-                    enter |= expr_row(ui, "Cap height", td_cap);
-                }
+                enter |= teardrop_rows(ui, "hole", td_apex, td_angle, td_peak, td_cap, &mut d.extra);
             }
+        }
+        Kind::Teardrop { apex, angle, peak, cap } => {
+            enter |= teardrop_rows(ui, "td", apex, angle, peak, cap, &mut d.extra);
         }
         _ => enter |= additional_rows(app, d, ui),
     }
@@ -1148,3 +1147,42 @@ mod all_tests;
 #[cfg(test)]
 #[path = "dialogs_sketch_tests.rs"]
 mod sketch_tests;
+
+/// A teardrop's rows: the apex (the printer's up), the overhang angle, the peak, and the cap
+/// height when the peak is cut flat. Shared by the Hole form's teardrop type and the Teardrop
+/// dialog; `id` keeps their combos apart. With the hole's axis known from the pick, an apex
+/// running along it is turned once (and the note says to where); one the user then chooses
+/// along it is kept, with a note that the hole stays round.
+fn teardrop_rows(
+    ui: &mut egui::Ui,
+    id: &str,
+    apex: &mut usize,
+    angle: &mut String,
+    peak: &mut usize,
+    cap: &mut String,
+    extra: &mut serde_json::Map<String, Value>,
+) -> bool {
+    use crate::dialogs::{APEX_LABELS, apex_along, apex_index, teardrop_apex_fix, teardrop_axis};
+    let mut enter = false;
+    teardrop_apex_fix(extra, id, apex);
+    choice_row(ui, "Apex", &format!("{id}_apex"), apex, &APEX_LABELS);
+    if let Some(axis) = teardrop_axis(extra, id) {
+        if apex_along(*apex, axis) {
+            ui_kit::text(
+                ui,
+                tr("The hole runs along the apex, the printer's up: it prints round and is left round. Pick an apex across it."),
+                ui_kit::Text::Note("td_along"),
+            );
+        } else if extra.contains_key(&format!("{id}_turned")) {
+            let along = APEX_LABELS.get(apex_index(axis)).copied().unwrap_or("Z");
+            let to = APEX_LABELS.get(*apex).copied().unwrap_or("+X");
+            ui_kit::text(ui, &format!("{} {along}, {} {to}.", tr("The hole runs along"), tr("so the peak points")), ui_kit::Text::Note("td_turned"));
+        }
+    }
+    enter |= expr_row(ui, "Overhang angle", angle);
+    choice_row(ui, "Peak", &format!("{id}_peak"), peak, &crate::dialogs::PEAK_LABELS);
+    if *peak == 1 {
+        enter |= expr_row(ui, "Cap height", cap);
+    }
+    enter
+}

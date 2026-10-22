@@ -57,6 +57,7 @@ pub const MODIFIERS: &[ToolModifiers] = &[
     ToolModifiers { tool: "solid.scale", scopes: SELECT_ONLY, bindings: &[], audit: Audit::VerifiedNoOp },
     ToolModifiers { tool: "solid.offset_face", scopes: SELECT_MANIP, bindings: &[], audit: Audit::VerifiedNoOp },
     ToolModifiers { tool: "solid.thread", scopes: SELECT_ONLY, bindings: &[], audit: Audit::VerifiedNoOp },
+    ToolModifiers { tool: "solid.teardrop", scopes: SELECT_ONLY, bindings: &[], audit: Audit::VerifiedNoOp },
     ToolModifiers { tool: "material.assign", scopes: SELECT_ONLY, bindings: &[], audit: Audit::VerifiedNoOp },
     ToolModifiers { tool: "inspect.section", scopes: SELECT_MANIP, bindings: &[], audit: Audit::VerifiedNoOp },
     ToolModifiers { tool: "inspect.measure", scopes: SELECT_ONLY, bindings: &[], audit: Audit::VerifiedNoOp },
@@ -243,6 +244,14 @@ crate::dialog_descriptor::dialog_descriptors! {
                 suggested: Option<String>,
                 /// The picks used for the suggestion, so an unchanged dialog does no geometry work.
                 of: Vec<Sel>,
+            },
+            /// A teardrop cut over an existing round hole: the apex (an index into `APEX_DIRS`),
+            /// the overhang angle, and the peak (0 pointed, 1 cut flat at `cap` above the centre).
+            Teardrop {
+                apex: usize,
+                angle: String,
+                peak: usize,
+                cap: String,
             },
             /// A rib (one wall along open curves) or a web (a wall per curve).
             Rib {
@@ -669,6 +678,10 @@ impl Dialog {
                 Kind::Thread { designation: String::new(), length: String::new(), suggested: None, of: Vec::new() },
                 vec![SelInput::new("Cylindrical face", FACES, false)],
             ),
+            "solid.teardrop" => Dialog::new(
+                Kind::Teardrop { apex: 0, angle: "45 deg".into(), peak: 0, cap: "2.5 mm".into() },
+                vec![SelInput::new("Round hole", FACES, false)],
+            ),
             "material.assign" => Dialog::new(Kind::Material { index: 1 }, vec![SelInput::new("Bodies", BODIES, true)]),
             "inspect.section" => {
                 Dialog::new(Kind::Section { offset: "0 mm".into(), flip: false }, vec![SelInput::new("Plane", PLANES | PLANAR_FACES, false)])
@@ -844,6 +857,7 @@ impl Dialog {
             inp.items = default_profiles(s);
         }
         d.sync_thread(s);
+        d.sync_teardrop(s);
         d.advance();
         Some(d)
     }
@@ -865,6 +879,35 @@ impl Dialog {
             _ => None,
         });
         *designation = suggested.clone().unwrap_or_default();
+    }
+
+    /// A teardrop dialog (the Teardrop command, or the Hole form on its Teardrop type) learns
+    /// the hole's axis from its pick: the cylinder's for a round hole, the face normal for a hole
+    /// drilled into a face. The Apex row then turns a default running along it and says so.
+    fn sync_teardrop(&mut self, s: &Session) {
+        let first = self.inputs.first().and_then(|i| i.items.first());
+        let (id, apex, axis) = match &mut self.kind {
+            Kind::Teardrop { apex, .. } => {
+                let axis = match first {
+                    Some(Sel::Face { point, .. }) => solidcraft_engine::doc::hole_axis_at(&s.world_state(), *point),
+                    _ => None,
+                };
+                ("td", apex, axis)
+            }
+            Kind::Hole { kind: 3, td_apex, .. } => {
+                let axis = match first {
+                    Some(Sel::Face { body, index, .. }) => planar_face(s, body, *index).map(|(_, n)| n),
+                    _ => None,
+                };
+                ("hole", td_apex, axis)
+            }
+            _ => return,
+        };
+        match axis {
+            Some(a) => self.extra.insert(format!("{id}_axis"), json!([a.x, a.y, a.z])),
+            None => self.extra.remove(&format!("{id}_axis")),
+        };
+        teardrop_apex_fix(&mut self.extra, id, apex);
     }
 
     pub fn rename(feature: u64, name: &str) -> Dialog {
@@ -935,6 +978,7 @@ impl Dialog {
                 | Kind::Construct { .. }
                 | Kind::Move { .. }
                 | Kind::Hole { .. }
+                | Kind::Teardrop { .. }
                 | Kind::Primitive { .. }
                 | Kind::Combine { .. }
                 | Kind::BoundaryFill { .. }
@@ -1159,6 +1203,7 @@ impl Dialog {
         }
         self.error = None;
         self.sync_thread(s);
+        self.sync_teardrop(s);
     }
 
     /// Box selection result: replace (or add to) the active input.
@@ -1204,6 +1249,7 @@ impl Dialog {
             }
         }
         self.sync_thread(s);
+        self.sync_teardrop(s);
     }
 
     /// Rebuild a Fillet or Chamfer dialog's edge input from the edges that were picked when
@@ -1643,6 +1689,7 @@ fn title(k: &Kind) -> &'static str {
         Kind::PathPattern { .. } => "PATTERN ON PATH",
         Kind::Split => "SPLIT BODY",
         Kind::Thread { .. } => "THREAD",
+        Kind::Teardrop { .. } => "TEARDROP",
         Kind::Section { .. } => "SECTION ANALYSIS",
         Kind::PatternRect { .. } => "RECTANGULAR PATTERN",
         Kind::PatternCirc { .. } => "CIRCULAR PATTERN",
@@ -1996,6 +2043,7 @@ fn input_rows_range(d: &mut Dialog, ui: &mut egui::Ui, s: &Session, range: std::
         d.active = i;
     }
     d.sync_thread(s);
+    d.sync_teardrop(s);
 }
 
 /// Feature patterns use the same source-fixed slot ordering and controls as sketch patterns.
@@ -2242,6 +2290,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     auto_operation(app, &mut d);
     d.sync_thread(&app.session);
+    d.sync_teardrop(&app.session);
     update_measure(app, &mut d);
     update_fill_cells(app, &mut d);
     // A refused OK's error is about the inputs it ran with (#641). Once a value (in the dialog,
@@ -2761,6 +2810,59 @@ pub(crate) fn shown_expr(e: &str, kind: ValueKind) -> String {
 
 fn dot(a: &[f64; 3], v: Vec3) -> f64 {
     a[0] * v.x + a[1] * v.y + a[2] * v.z
+}
+
+/// The Apex combo's entry nearest a direction: a free direction from a script shows as that.
+fn apex_index(apex: Vec3) -> usize {
+    APEX_DIRS.iter().enumerate().max_by(|a, b| dot(a.1, apex).total_cmp(&dot(b.1, apex))).map_or(0, |(i, _)| i)
+}
+
+/// Does an Apex entry run along a hole's axis, within the evaluator's tolerance, so the hole
+/// prints round whatever cross-section is asked for?
+pub(crate) fn apex_along(apex: usize, axis: Vec3) -> bool {
+    APEX_DIRS.get(apex).is_some_and(|a| dot(a, axis).abs() > solidcraft_engine::doc::TEARDROP_ALONG.to_radians().cos())
+}
+
+/// The hole's axis a teardrop dialog learnt from its pick, kept in `extra` under `<id>_axis`.
+pub(crate) fn teardrop_axis(extra: &serde_json::Map<String, Value>, id: &str) -> Option<Vec3> {
+    let a = extra.get(&format!("{id}_axis"))?.as_array()?;
+    match (a.first()?.as_f64(), a.get(1)?.as_f64(), a.get(2)?.as_f64()) {
+        (Some(x), Some(y), Some(z)) => Some(Vec3::new(x, y, z)),
+        _ => None,
+    }
+}
+
+/// Once per axis the dialog learns: an apex running along the hole is turned to the first
+/// world axis across it, and `<id>_turned` says so for the row's note. A later choice of the
+/// user's is left alone (the row's note then says the hole stays round).
+pub(crate) fn teardrop_apex_fix(extra: &mut serde_json::Map<String, Value>, id: &str, apex: &mut usize) {
+    let Some(axis) = teardrop_axis(extra, id) else {
+        extra.remove(&format!("{id}_turned"));
+        return;
+    };
+    let key = format!("{id}_fixed_for");
+    let seen = json!([axis.x, axis.y, axis.z]);
+    if extra.get(&key) == Some(&seen) {
+        return;
+    }
+    extra.insert(key, seen);
+    extra.remove(&format!("{id}_turned"));
+    if apex_along(*apex, axis)
+        && let Some(i) = (0..APEX_DIRS.len()).find(|&i| !apex_along(i, axis))
+    {
+        *apex = i;
+        extra.insert(format!("{id}_turned"), json!(true));
+    }
+}
+
+/// A teardrop's `apex`, `angle` and (with a flat peak) `cap` parameters, as the Hole form's
+/// teardrop type and the Teardrop dialog both send them.
+fn teardrop_params(p: &mut Value, apex: usize, angle: &str, peak: usize, cap: &str) {
+    p["apex"] = json!(APEX_DIRS.get(apex).copied().unwrap_or([0.0, 0.0, 1.0]));
+    p["angle"] = json!(angle);
+    if peak == 1 {
+        p["cap"] = json!(cap);
+    }
 }
 
 fn hole_defaults() -> Kind {
@@ -3544,6 +3646,12 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             put(&mut p, &[("length", length)]);
             ("solid.thread", p)
         }
+        Kind::Teardrop { apex, angle, peak, cap } => {
+            need(0, "a round hole")?;
+            let mut p = json!({"face": face_points(0).into_iter().next().unwrap_or(Value::Null)});
+            teardrop_params(&mut p, *apex, angle, *peak, cap);
+            ("solid.teardrop", p)
+        }
         Kind::Material { index } => {
             need(0, "bodies")?;
             let name = s.doc.material_names().get(*index).cloned().unwrap_or_else(|| "Default".into());
@@ -3647,13 +3755,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                         params["cs_diameter"] = json!(cs_diameter);
                         params["cs_angle"] = json!(cs_angle);
                     }
-                    3 => {
-                        params["apex"] = json!(APEX_DIRS.get(*td_apex).copied().unwrap_or([0.0, 0.0, 1.0]));
-                        params["angle"] = json!(td_angle);
-                        if *td_peak == 1 {
-                            params["cap"] = json!(td_cap);
-                        }
-                    }
+                    3 => teardrop_params(&mut params, *td_apex, td_angle, *td_peak, td_cap),
                     _ => {}
                 }
                 out.push(("solid.hole".to_string(), params));
@@ -4379,8 +4481,7 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                     }
                     HoleKind::Teardrop { apex, angle, cap } => {
                         *kind = 3;
-                        // The nearest listed axis; a free direction from a script shows as that.
-                        *td_apex = APEX_DIRS.iter().enumerate().max_by(|a, b| dot(a.1, apex.0).total_cmp(&dot(b.1, apex.0))).map_or(0, |(i, _)| i);
+                        *td_apex = apex_index(apex.0);
                         *td_angle = angle.to_string();
                         if let Some(c) = cap {
                             *td_peak = 1;
@@ -4760,6 +4861,21 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                 inp.items = face_sel(s, face.0).into_iter().collect();
             }
             d.sync_thread(s);
+            d.sync_teardrop(s);
+            d
+        }
+        FeatureKind::Teardrop { face, apex, angle, cap } => {
+            let mut d = start("solid.teardrop")?;
+            d.kind = Kind::Teardrop {
+                apex: apex_index(apex.0),
+                angle: angle.to_string(),
+                peak: usize::from(cap.is_some()),
+                cap: cap.as_ref().map(ToString::to_string).unwrap_or_else(|| "2.5 mm".into()),
+            };
+            if let Some(inp) = d.inputs.first_mut() {
+                inp.items = face_sel(s, face.0).into_iter().collect();
+            }
+            d.sync_teardrop(s);
             d
         }
         FeatureKind::BoundingSolid { bodies, .. } => {

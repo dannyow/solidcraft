@@ -379,3 +379,79 @@ fn the_hole_form_cuts_a_teardrop_and_shows_it_again_on_edit() {
     let Kind::Hole { kind, td_apex, td_peak, .. } = &e.kind else { panic!("{:?}", e.kind) };
     assert_eq!((*kind, *td_apex, *td_peak), (3, 3, 0));
 }
+
+/// The Teardrop dialog (SOLID › MODIFY): a round hole picked on its wall, the apex, overhang
+/// angle and flat cap, cut as `solid.teardrop`, and shown again with the same rows on edit.
+#[test]
+fn the_teardrop_dialog_cuts_over_a_picked_hole_and_shows_it_again_on_edit() {
+    let mut h = Harness::new();
+    h.app.ui.show_origin = false;
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("solid.hole", json!({"position": [40, 15, 10], "diameter": 6})).unwrap();
+    let mut d = Dialog::for_command(&h.app, "solid.teardrop").unwrap();
+    d.inputs[0].items = vec![face_sel(&h.app.session, Vec3::new(30.0, 12.0, 10.0)).unwrap()];
+    if let Kind::Teardrop { apex, angle, peak, cap } = &mut d.kind {
+        *apex = 0;
+        *angle = "40 deg".into();
+        *peak = 1;
+        *cap = "3 mm".into();
+    }
+    let cmds = dialog_commands(&h.app, &d).unwrap();
+    let (id, p) = cmds.first().unwrap();
+    assert_eq!(id, "solid.teardrop");
+    assert_eq!(p["apex"], json!([0.0, 0.0, 1.0]));
+    assert_eq!(p["angle"], json!("40 deg"));
+    assert_eq!(p["cap"], json!("3 mm"));
+    assert!(p["face"].is_array(), "{p}");
+    h.app.run(id, p.clone()).unwrap();
+    let f = h.app.session.doc.features.last().unwrap();
+    let FeatureKind::Teardrop { apex, angle, cap, .. } = &f.kind else { panic!("{:?}", f.kind) };
+    assert!(apex.0.dist(Vec3::Z) < 1e-9);
+    assert_eq!(angle.to_string(), "40 deg");
+    assert_eq!(cap.as_ref().map(ToString::to_string), Some("3 mm".into()));
+    // Edit: the form comes back on the same rows with the same values, and the face picked.
+    let id = f.id;
+    let e = for_feature(&h.app, id, None).unwrap();
+    let Kind::Teardrop { apex, angle, peak, cap } = &e.kind else { panic!("{:?}", e.kind) };
+    assert_eq!((*apex, angle.as_str(), *peak, cap.as_str()), (0, "40 deg", 1, "3 mm"));
+    assert_eq!(e.inputs[0].items.len(), 1);
+    // A pointed one from a script with the apex −Y (across the hole): the combo shows −Y and Pointed.
+    h.app.run("solid.teardrop", json!({"face": [20, 12, 10], "apex": [0, -1, 0]})).unwrap();
+    let id = h.app.session.doc.features.last().unwrap().id;
+    let e = for_feature(&h.app, id, None).unwrap();
+    let Kind::Teardrop { apex, peak, .. } = &e.kind else { panic!("{:?}", e.kind) };
+    assert_eq!((*apex, *peak), (5, 0));
+}
+
+/// A hole along the default apex (drilled into the top face, so along Z): the Teardrop dialog
+/// learns the axis from the picked wall and turns the apex to +X, saying so; the Hole form's
+/// Teardrop type does the same from the face it drills into, and leaves a side face alone.
+#[test]
+fn teardrop_dialogs_turn_an_apex_that_runs_along_the_hole() {
+    let mut h = Harness::new();
+    h.app.ui.show_origin = false;
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("solid.hole", json!({"position": [20, 15, 20], "diameter": 6})).unwrap();
+    let mut d = Dialog::for_command(&h.app, "solid.teardrop").unwrap();
+    d.inputs[0].items = vec![face_sel(&h.app.session, Vec3::new(23.0, 15.0, 10.0)).unwrap()];
+    d.sync_teardrop(&h.app.session);
+    let Kind::Teardrop { apex, .. } = &d.kind else { panic!("{:?}", d.kind) };
+    assert_eq!(*apex, 2, "turned to +X");
+    assert!(d.extra.contains_key("td_turned") && d.extra.contains_key("td_axis"), "{:?}", d.extra);
+    let cmds = dialog_commands(&h.app, &d).unwrap();
+    let (id, p) = cmds.first().unwrap();
+    assert_eq!(p["apex"], json!([1.0, 0.0, 0.0]));
+    let v = h.app.run(id, p.clone()).unwrap();
+    assert!(v["warning"].is_null(), "{:?}", v["warning"]);
+    // The Hole form: a position on the top face turns the apex; one on the +x face does not.
+    for (face, turned) in [(Vec3::new(10.0, 10.0, 20.0), true), (Vec3::new(40.0, 10.0, 10.0), false)] {
+        let mut d = Dialog::for_command(&h.app, "solid.hole").unwrap();
+        if let Kind::Hole { kind, .. } = &mut d.kind {
+            *kind = 3;
+        }
+        d.inputs[0].items = vec![face_sel(&h.app.session, face).unwrap()];
+        d.sync_teardrop(&h.app.session);
+        let Kind::Hole { td_apex, .. } = &d.kind else { panic!("{:?}", d.kind) };
+        assert_eq!((*td_apex, d.extra.contains_key("hole_turned")), (if turned { 2 } else { 0 }, turned), "{face:?}: {:?}", d.extra);
+    }
+}

@@ -92,6 +92,7 @@ pub(crate) fn icon_of(k: &FeatureKind) -> &'static str {
         FeatureKind::Import { .. } | FeatureKind::MeshImport { .. } | FeatureKind::MeshConvert { .. } => "import",
         FeatureKind::BodyTransfer { .. } => "move",
         FeatureKind::Thread { .. } => "thread",
+        FeatureKind::Teardrop { .. } => "hole",
         FeatureKind::SplitFace { .. } => "split_face",
         FeatureKind::Scale { .. } => "scale",
         FeatureKind::OffsetFace { .. } => "offset_face",

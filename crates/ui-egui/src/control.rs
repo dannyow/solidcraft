@@ -1872,7 +1872,7 @@ mod tests {
             let (req, _rx) = ControlRequest::new(method, params);
             match handle(&mut h.app, &h.ctx, &req) {
                 Outcome::Done(v) => v,
-                Outcome::Screenshot { .. } => Value::Null,
+                Outcome::Screenshot { .. } | Outcome::ExportSvg { .. } => Value::Null,
             }
         }
         raw(&mut h, "ui.view", json!({"view": "top", "animate": true}));

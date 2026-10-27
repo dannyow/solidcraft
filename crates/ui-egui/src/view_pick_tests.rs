@@ -159,7 +159,7 @@ fn raw_call(h: &mut Harness, method: &str, params: serde_json::Value) -> serde_j
     let (req, _rx) = crate::control::ControlRequest::new(method, params);
     match crate::control::handle(&mut h.app, &h.ctx, &req) {
         crate::control::Outcome::Done(v) => v,
-        crate::control::Outcome::Screenshot { .. } => json!({"ok": true}),
+        crate::control::Outcome::Screenshot { .. } | crate::control::Outcome::ExportSvg { .. } => json!({"ok": true}),
     }
 }
 

@@ -15,7 +15,7 @@ use serde_json::Value;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
 use solidcraft_engine::geom::Vec3;
 
-use super::{Spec, circle, face_pick, len, rect, vec3_of};
+use super::{PlaceSource, Spec, circle, face_pick, len, rect, vec3_of};
 use crate::SolveApp;
 use crate::dialogs::{Dialog, Kind};
 use crate::selection::PLANAR_FACES;
@@ -27,10 +27,10 @@ pub(super) static SPEC: Spec = Spec {
     snap_commands: &[],
     move_tip: "Drag to place it on another face.",
     many: false,
-    places: |app, d| super::one(frame(app, d)),
-    move_to,
+    place: PlaceSource::Own { places: |app, d| super::one(frame(app, d)), move_to },
     click: None,
     footprint,
+    freedom: super::anywhere,
     turn: None,
 };
 

@@ -2,10 +2,13 @@
 //! face while its dialog is open, and moves one from Edit Feature.
 
 use serde_json::json;
+use solidcraft_engine::Sel;
 use solidcraft_engine::doc::FeatureKind;
 use solidcraft_engine::geom::Vec3;
 
+use crate::dialogs::Kind;
 use crate::scenario::Harness;
+use crate::selection::PLANAR_FACES;
 
 /// An 80 × 50 × 10 plate seen from the top, with the handles on.
 fn plate() -> Harness {
@@ -76,4 +79,56 @@ fn marker_moves_a_sphere_from_edit_feature() {
     let c = Vec3::new(value(&h, &center[0]), value(&h, &center[1]), value(&h, &center[2]));
     assert!(c.dist(Vec3::new(60.0, 35.0, 10.0)) < 0.5, "moved: {c:?}");
     h.step(&json!({"expect": {"errors": 0, "bodies": 1}})).unwrap();
+}
+
+#[test]
+fn marker_starts_at_the_bottom_middle_of_a_box_placed_by_its_centre() {
+    let mut h = plate();
+    let made = h.app.run("solid.box", json!({"length": 10, "width": 6, "height": 8, "center": [20, 15, 14], "operation": "join"})).unwrap();
+    let name = made["name"].as_str().unwrap().to_string();
+    h.settle();
+    h.step(&json!({"call": "ui.editFeature", "params": {"feature": name}})).unwrap();
+    h.settle();
+    let at = h.at(&json!({"handle": "primitive:position"})).unwrap();
+    let expect = h.at(&json!({"world": [20, 15, 10]})).unwrap();
+    assert!((at[0] - expect[0]).hypot(at[1] - expect[1]) < 2.0, "the marker stands under the centre, on the bottom: {at:?} {expect:?}");
+}
+
+#[test]
+fn a_dialog_with_a_face_input_for_its_place_is_moved_through_that_input() {
+    // A Cylinder that stands where its Face input is picked (reference edges, #6380) works its
+    // place out from that input every frame, so the marker moves the input, not the place.
+    let mut h = plate();
+    h.step(&json!({"start": "solid.cylinder"})).unwrap();
+    h.settle();
+    {
+        let d = h.app.dialog.as_mut().expect("a dialog");
+        d.inputs.insert(0, crate::selection::SelInput::new("Face", PLANAR_FACES | crate::selection::FACES | crate::selection::VERTICES, false));
+        d.active = 0;
+    }
+    h.frames(2);
+    h.step(&json!({"drag": [{"handle": "primitive:position"}, {"world": [40.0, 25.0, 10.0]}], "steps": 12})).unwrap();
+    h.settle();
+    let d = h.app.dialog.as_ref().expect("the dialog is still open");
+    match d.inputs[0].items.as_slice() {
+        [Sel::Face { point, .. }] => assert!(point.dist(Vec3::new(40.0, 25.0, 10.0)) < 0.5, "the face place: {point:?}"),
+        other => panic!("one face place in the input, not {other:?}"),
+    }
+    let Kind::Primitive { at, .. } = &d.kind else { panic!("a primitive") };
+    assert!(at.is_none(), "the place is the input's to work out, not written directly: {at:?}");
+}
+
+#[test]
+fn a_coil_with_a_sketch_profile_has_no_marker() {
+    let mut h = plate();
+    h.step(&json!({"start": "solid.coil"})).unwrap();
+    h.settle();
+    assert!(h.at(&json!({"handle": "primitive:position"})).is_ok(), "a coil of its own section has the marker");
+    {
+        let d = h.app.dialog.as_mut().expect("a dialog");
+        assert!(!d.inputs.is_empty(), "the Coil dialog has a Profile input");
+        d.inputs[0].items.push(Sel::Face { body: "Body1".into(), index: 0, point: Vec3::new(1.0, 1.0, 10.0) });
+    }
+    h.frames(2);
+    assert!(h.at(&json!({"handle": "primitive:position"})).is_err(), "with a profile picked, no marker");
 }

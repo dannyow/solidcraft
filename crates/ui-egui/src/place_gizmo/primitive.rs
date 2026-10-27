@@ -15,9 +15,10 @@ use serde_json::Value;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
 use solidcraft_engine::geom::Vec3;
 
-use super::{Spec, circle, len, rect, vec3_of};
+use super::{Spec, circle, face_pick, len, rect, vec3_of};
 use crate::SolveApp;
 use crate::dialogs::{Dialog, Kind};
+use crate::selection::PLANAR_FACES;
 use crate::viewport::Hit;
 
 pub(super) static SPEC: Spec = Spec {
@@ -66,6 +67,10 @@ fn frame(app: &SolveApp, d: &Dialog) -> Option<(Vec3, Vec3)> {
     }
     match *cmd {
         "solid.box" => {
+            // The middle of the bottom face: from the corner, or from the box's centre.
+            if let Some(centre) = d.extra.get("center").and_then(|v| expr_point(app, v)) {
+                return Some((centre - Vec3::Z * (size(app, d, "height") * 0.5), Vec3::Z));
+            }
             let corner = d.extra.get("corner").and_then(|v| expr_point(app, v)).unwrap_or(Vec3::ZERO);
             Some((corner + Vec3::new(size(app, d, "length") * 0.5, size(app, d, "width") * 0.5, 0.0), Vec3::Z))
         }
@@ -78,9 +83,19 @@ fn frame(app: &SolveApp, d: &Dialog) -> Option<(Vec3, Vec3)> {
     }
 }
 
-/// Stand the primitive on the face under the pointer, as a pre-selected face places it.
+/// Stand the primitive on the face under the pointer, as a pre-selected face places it. A dialog
+/// whose first input takes a face as the place (a Cylinder's, once it stands by its reference
+/// edges) is moved through that input, as a Rest is, and works its place out from it itself.
 fn move_to(app: &SolveApp, d: &mut Dialog, hits: &[Hit], _: usize) -> bool {
     let s = &app.session;
+    if d.inputs.first().is_some_and(|i| i.accept & PLANAR_FACES != 0) {
+        let Some(to) = face_pick(d, s, hits) else { return false };
+        if let Some(inp) = d.inputs.first_mut() {
+            inp.items = vec![to];
+        }
+        d.error = None;
+        return true;
+    }
     let Some((p, n)) = hits.iter().find_map(|h| match h {
         Hit::Face { body, index, point } => Some((*point, crate::dialogs::planar_face(s, body, *index).map(|(_, n)| n))),
         _ => None,

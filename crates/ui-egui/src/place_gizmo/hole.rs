@@ -12,7 +12,7 @@
 use solidcraft_engine::Sel;
 use solidcraft_engine::geom::Vec3;
 
-use super::{Freedom, Place, Spec, circle, face_pick, len, vec3_of};
+use super::{Freedom, Place, PlaceSource, Spec, circle, face_pick, len, vec3_of};
 use crate::SolveApp;
 use crate::dialogs::{Dialog, Kind};
 use crate::viewport::Hit;
@@ -23,8 +23,7 @@ pub(super) static SPEC: Spec = Spec {
     snap_commands: &[],
     move_tip: "Drag to move the hole; click to remove it",
     many: true,
-    places,
-    move_to,
+    place: PlaceSource::Own { places, move_to },
     click: Some(|app, d, key| crate::hole_place::remove_place(d, &app.session, key)),
     footprint,
     freedom: |_, d, _| crate::hole_refs::freedom(d),

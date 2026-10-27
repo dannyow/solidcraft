@@ -898,7 +898,7 @@ impl Dialog {
                     at: None,
                     refs: Default::default(),
                 },
-                vec![],
+                crate::primitive_placement::inputs("solid.box"),
             ),
             "solid.cylinder" => Dialog::new(
                 Kind::Primitive {
@@ -1486,6 +1486,10 @@ impl Dialog {
         }
         self.error = None;
         self.sync_thread(s);
+        if let Kind::Primitive { cmd, at, .. } = &mut self.kind {
+            let picked = self.inputs.get(self.active).and_then(|i| i.items.first());
+            crate::primitive_placement::picked(s, cmd, at, &mut self.extra, picked);
+        }
     }
 
     /// Box selection result: replace (or add to) the active input.
@@ -3300,7 +3304,7 @@ pub(crate) fn length_default(s: &Session, number: &str) -> String {
 /// A feature's length as its edit field shows it. A bare number is kept in millimetres: where the
 /// design reads bare numbers in another unit, the field says "mm" (as the configuration table
 /// does), so OK keeps the size. Anything else shows as stored.
-fn stored_length(s: &Session, e: &str) -> String {
+pub(crate) fn stored_length(s: &Session, e: &str) -> String {
     if s.doc.with_design_unit(e, ValueKind::Length) == e { e.to_string() } else { format!("{} mm", e.trim()) }
 }
 
@@ -4348,6 +4352,8 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                         p.insert("center".into(), pt(point));
                     }
                 }
+            } else {
+                crate::primitive_placement::params(s, cmd, &d.extra, &mut p);
             }
             p.insert("operation".into(), json!(OPS.get(*operation).copied().unwrap_or("new")));
             (cmd, Value::Object(p))

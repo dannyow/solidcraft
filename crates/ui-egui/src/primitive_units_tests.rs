@@ -544,7 +544,7 @@ fn a_point_picked_in_the_box_dialog_becomes_its_corner_or_centre() {
     let pick = |h: &mut Harness, sel: Sel| {
         let mut d = h.app.dialog.take().unwrap();
         let hit = crate::viewport::Hit::Vertex { body: "Base".into(), point: Vec3::ZERO };
-        assert!(d.active_input().is_some_and(|i| i.accepts(&hit, |_, _| true).is_some()), "the Box dialog takes a vertex");
+        assert!(d.active_input().is_some_and(|i| i.accepts(&hit, None, |_, _| true).is_some()), "the Box dialog takes a vertex");
         d.pick(&h.app.session, sel);
         h.app.dialog = Some(d);
         h.frames(2);

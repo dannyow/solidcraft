@@ -1481,7 +1481,8 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                     Container::new(ui.ctx(), Surface::Popup).menu(&arrow).show(|ui| {
                         let variants: Vec<_> = f.commands.iter().filter_map(|id| solidcraft_engine::find_command(id)).collect();
                         dropdown_keys(app, ui, &variants);
-                        sketch_menu_rows(app, ui, &variants, &mut menu, &mut toggle);
+                        let width = dropdown_width(app, ui, &variants);
+                        sketch_menu_rows(app, ui, &variants, width, &mut menu, &mut toggle);
                     });
                 } else if labels {
                     let button_label = crate::workspace::ribbon_button_label(selected);
@@ -1626,7 +1627,10 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                                 ui.label(egui::RichText::new(crate::i18n::tr_label("Not available yet")).color(t.text_dim));
                             }
                             if sketch_create {
-                                sketch_create_menu(app, ui, &cmds, &mut menu, &mut toggle);
+                                // One width for every row and the footer, as in the other panels.
+                                let row_w = dropdown_width(app, ui, &cmds);
+                                ui.set_width(row_w);
+                                sketch_create_menu(app, ui, &cmds, row_w, &mut menu, &mut toggle);
                                 section_footer(ui);
                                 return;
                             }
@@ -1699,7 +1703,7 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                     for (panel, cmds) in &overflow {
                         crate::ui_kit::Menu::button(ui, *panel, |ui| {
                             if tab == "SKETCH" && *panel == "CREATE" {
-                                sketch_create_menu(app, ui, cmds, &mut menu, &mut toggle);
+                                sketch_create_menu(app, ui, cmds, dropdown_width(app, ui, cmds), &mut menu, &mut toggle);
                                 return;
                             }
                             if *panel == "SELECT" {
@@ -1975,10 +1979,12 @@ fn dropdown_row(app: &SolveApp, ui: &mut egui::Ui, c: &'static solidcraft_engine
 }
 
 /// Creation menus keep related variants together, including collapsed and overflow panels.
+/// The plain rows are `width` wide, the width the menu gives its family rows.
 fn sketch_create_menu(
     app: &mut SolveApp,
     ui: &mut egui::Ui,
     cmds: &[&'static solidcraft_engine::CommandSpec],
+    width: f32,
     menu: &mut Option<(egui::Pos2, &'static str)>,
     toggle: &mut Option<&'static str>,
 ) {
@@ -1992,7 +1998,8 @@ fn sketch_create_menu(
                 item.submenu = true;
                 let response = crate::ui_kit::Menu::item_button(ui, &item, |ui| {
                     dropdown_keys(app, ui, &variants);
-                    sketch_menu_rows(app, ui, &variants, menu, toggle);
+                    let variants_w = dropdown_width(app, ui, &variants);
+                    sketch_menu_rows(app, ui, &variants, variants_w, menu, toggle);
                 });
                 crate::scenario::publish_handle(&format!("create_family:{}", f.label), response.response.rect.center());
             }
@@ -2000,7 +2007,7 @@ fn sketch_create_menu(
         ui.separator();
         let rest: Vec<_> = cmds.iter().copied().filter(|c| crate::sketch_families::family(c.id).is_none()).collect();
         dropdown_keys(app, ui, &rest);
-        sketch_menu_rows(app, ui, &rest, menu, toggle);
+        sketch_menu_rows(app, ui, &rest, width, menu, toggle);
     });
 }
 
@@ -2043,10 +2050,10 @@ fn sketch_menu_rows(
     app: &mut SolveApp,
     ui: &mut egui::Ui,
     cmds: &[&'static solidcraft_engine::CommandSpec],
+    width: f32,
     menu: &mut Option<(egui::Pos2, &'static str)>,
     toggle: &mut Option<&'static str>,
 ) {
-    let width = dropdown_width(app, ui, cmds);
     for c in cmds {
         let pinned = crate::toolbar_custom::pinned_on(app, "SKETCH", c.id).is_some();
         match dropdown_row(app, ui, c, width, pinned) {
@@ -3105,6 +3112,22 @@ mod dropdown_tests {
         assert_eq!(h.app.tool.as_ref().map(|tool| tool.cmd), Some("sketch.line.midpoint"));
     }
 
+    /// Plain rows (Point) and family rows (Slot) span the same width, so a plain row's hover
+    /// background and pin reach the drop-down's right edge.
+    #[test]
+    fn sketch_create_plain_and_family_rows_share_both_edges() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.run("sketch.create", json!({"plane":"XY"})).unwrap();
+        h.frames(4);
+        h.step(&json!({"click":{"handle":"panel:SKETCH:CREATE"}})).unwrap();
+        h.frames(4);
+        let point = crate::scenario::rect_of("menu:sketch.point").expect("Point is a plain row");
+        let slot = crate::scenario::rect_of("menu:Slot").expect("Slot is a family row");
+        assert!((point.left() - slot.left()).abs() < 0.5, "left edges differ: Point {point:?}, Slot {slot:?}");
+        assert!((point.right() - slot.right()).abs() < 0.5, "right edges differ: Point {point:?}, Slot {slot:?}");
+    }
+
     #[test]
     fn sketch_create_family_rows_paint_the_first_variants_icons() {
         let mut h = crate::scenario::Harness::new();
@@ -3112,7 +3135,7 @@ mod dropdown_tests {
         let cmds: Vec<_> = solidcraft_engine::command_specs().into_iter().filter(|c| c.tab == "SKETCH" && c.panel == "CREATE").collect();
         crate::icon_svg::audit::start();
         let mut output = h.ctx.run_ui(egui::RawInput::default(), |ui| {
-            sketch_create_menu(&mut h.app, ui, &cmds, &mut None, &mut None);
+            sketch_create_menu(&mut h.app, ui, &cmds, 200.0, &mut None, &mut None);
         });
         output.textures_delta.clear();
         let requested = crate::icon_svg::audit::take();

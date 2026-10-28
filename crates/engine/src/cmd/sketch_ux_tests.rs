@@ -1476,6 +1476,59 @@ fn auto_dimension_orientation_follows_where_its_text_is_placed() {
     assert!(((end.x - start.x).abs() - 24.0).abs() < 1e-6 && ((end.y - start.y).abs() - 40.0).abs() < 1e-6, "{start:?} {end:?}");
 }
 
+/// An ellipse alone: an `auto` dimension whose text goes past the ends of the major axis is the
+/// major half-axis (centre to the axis end point), anywhere else the minor half-axis. The sectors
+/// meet on the diagonals of the ellipse's own bounding box, so a turned ellipse works the same.
+#[test]
+fn an_ellipse_dimension_takes_its_half_axis_from_where_its_text_is_placed() {
+    use solidcraft_sketch::ConstraintKind;
+    let dimension = |major: [f64; 2], extra: Value| {
+        let mut s = new_sketch();
+        run(&mut s, "sketch.ellipse", json!({"center": [0, 0], "major": major, "minor_radius": 8}));
+        let mut p = json!({"entities": ["e1"]});
+        if let (Some(p), Some(extra)) = (p.as_object_mut(), extra.as_object()) {
+            p.extend(extra.clone());
+        }
+        let r = run(&mut s, "sketch.dimension", p);
+        let sk = sketch(&s);
+        let kind = sk.constraints.iter().find(|c| c.kind.is_dimension()).map(|c| c.kind.clone()).expect("a dimension");
+        let got = match kind {
+            ConstraintKind::Distance { .. } => "major",
+            ConstraintKind::Radius { .. } => "minor",
+            other => panic!("{extra}: {other:?}"),
+        };
+        (got, r["measured"].as_f64().unwrap_or(f64::NAN))
+    };
+    // Half-axes 20 and 8 along X, and the same ellipse turned by 45 degrees.
+    let turned = |x: f64, y: f64| {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        [h * (x - y), h * (x + y)]
+    };
+    for turn in [false, true] {
+        let place = |x: f64, y: f64| if turn { turned(x, y) } else { [x, y] };
+        let major = place(20.0, 0.0);
+        for ((x, y), expected) in [
+            ((30.0, 3.0), "major"),
+            ((-30.0, -5.0), "major"),
+            ((22.0, 8.0), "major"),
+            ((3.0, 16.0), "minor"),
+            ((-4.0, -12.0), "minor"),
+            ((18.0, 9.0), "minor"),
+        ] {
+            let (got, measured) = dimension(major, json!({"text_at": place(x, y)}));
+            assert_eq!(got, expected, "major end {major:?}, text at ({x}, {y})");
+            let value = if expected == "major" { 20.0 } else { 8.0 };
+            assert!((measured - value).abs() < 1e-9, "text at ({x}, {y}) measured {measured}");
+        }
+    }
+    // An explicit type wins over the placement; no text keeps today's minor half-axis.
+    assert_eq!(dimension([20.0, 0.0], json!({"type": "minor", "text_at": [30, 3]})).0, "minor");
+    assert_eq!(dimension([20.0, 0.0], json!({"type": "radius", "text_at": [30, 3]})).0, "minor");
+    assert_eq!(dimension([20.0, 0.0], json!({"type": "major", "text_at": [3, 16]})).0, "major");
+    assert_eq!(dimension([20.0, 0.0], json!({})).0, "minor");
+    assert_eq!(dimension([20.0, 0.0], json!({"text_at": [0, 0]})).0, "minor");
+}
+
 /// A two-link arm (B, elbow E, hand H) hanging off a rigid triangle A B C that only the cluster
 /// decomposition places: pinned at F by two of its corners and held at G by the third. Every
 /// line is dimensioned. Without decomposition budget the elbow's seed has nothing to build on.

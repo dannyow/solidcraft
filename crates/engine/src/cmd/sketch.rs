@@ -126,7 +126,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(concat!("p0, p1: overall ends, width", connect_doc!(), created_doc!())),
     CommandSpec::new("sketch.point", "Point", draw_point).at("SKETCH", "CREATE").icon("point").enabled(in_sketch).params(concat!("point: [x,y] (each a number or an expression over the design's parameters: the point is then fixed where it comes to and follows them) or a snap: \"mid:<line>\" (held at the line's midpoint), \"on:<curve>:x,y\" (on the curve near x,y), {vertex: [x,y,z]} or {on_edge: [x,y,z]} of the model; id?", connect_doc!(), created_doc!())),
     CommandSpec::new("sketch.dimension", "Sketch Dimension", dimension).at("SKETCH", "CREATE").icon("dimension").key("D").enabled(in_sketch).params(
-        "entities: [refs] (a line midpoint is \"mid:line_id\"), type?: auto|distance|horizontal|distance_x|vertical|distance_y|length|radius|diameter|angle, value?: number or expression (default: current; a bare number is in the design's units, e.g. 2 means 2 in in an inch design; give a unit such as \"50 mm\" to override), or `name = expression` (e.g. \"width = 40\"; also `#name = expression`), which adds the user parameter `name` with that expression and dimensions with `name` (refused when the name is taken or reserved; the reply's `defined` names it); text_at?: [x, y]. Two points or a line off the axes: with auto, text_at across from them is the distance between them, above or below them horizontal, beside them vertical. Two midpoints: placing text above or below their bounding box measures horizontally, beside it vertically. Two lines: the angle between them (acute, or 180° − it when the value is nearer that) unless text_at picks a sector. A line and a circle or arc: the distance from the line to its edge (the gap, or how far the edge reaches past a line that cuts it; 0 is tangent); dimension the centre point for the distance to the centre. A point and a circle or arc: the distance from the point to its edge (or how far within it a point inside lies). Two circles or arcs: the gap between their edges (or how far they overlap when they cross, or the narrowest gap between them when one lies inside the other); dimension their centre points for the distance between centres. An arc and one of its end points: the arc's length (type arc_length does it from the arc alone). A dimension the sketch already determines is refused (naming what determines it); if_redundant?: \"driven\" places it as a driven (reference) dimension instead. scale_sketch?: bool (the dimension tool sends true): when this is the sketch's first length dimension and nothing in the sketch fixes a size (no other driving length dimension, nothing fixed or projected), the whole sketch scales about its origin to the value instead of distorting. Returns measured in unit (mm or deg), and scaled: the factor when the sketch was scaled",
+        "entities: [refs] (a line midpoint is \"mid:line_id\"), type?: auto|distance|horizontal|distance_x|vertical|distance_y|length|radius|diameter|major|minor|angle, value?: number or expression (default: current; a bare number is in the design's units, e.g. 2 means 2 in in an inch design; give a unit such as \"50 mm\" to override), or `name = expression` (e.g. \"width = 40\"; also `#name = expression`), which adds the user parameter `name` with that expression and dimensions with `name` (refused when the name is taken or reserved; the reply's `defined` names it); text_at?: [x, y]. Two points or a line off the axes: with auto, text_at across from them is the distance between them, above or below them horizontal, beside them vertical. Two midpoints: placing text above or below their bounding box measures horizontally, beside it vertically. Two lines: the angle between them (acute, or 180° − it when the value is nearer that) unless text_at picks a sector. A line and a circle or arc: the distance from the line to its edge (the gap, or how far the edge reaches past a line that cuts it; 0 is tangent); dimension the centre point for the distance to the centre. A point and a circle or arc: the distance from the point to its edge (or how far within it a point inside lies). Two circles or arcs: the gap between their edges (or how far they overlap when they cross, or the narrowest gap between them when one lies inside the other); dimension their centre points for the distance between centres. An ellipse: major is its major half-axis (centre to the major-axis end point), minor or radius its minor half-axis; with auto, text_at past the ends of the major axis gives the major one, elsewhere the minor one (the minor without text_at). An arc and one of its end points: the arc's length (type arc_length does it from the arc alone). A dimension the sketch already determines is refused (naming what determines it); if_redundant?: \"driven\" places it as a driven (reference) dimension instead. scale_sketch?: bool (the dimension tool sends true): when this is the sketch's first length dimension and nothing in the sketch fixes a size (no other driving length dimension, nothing fixed or projected), the whole sketch scales about its origin to the value instead of distorting. Returns measured in unit (mm or deg), and scaled: the factor when the sketch was scaled",
     ),
     CommandSpec::new("sketch.constraint.horizontal_vertical", "Horizontal/Vertical", c_horizontal_vertical)
         .at("SKETCH", "CONSTRAINTS")
@@ -2456,8 +2456,9 @@ fn dimension(s: &mut Session, p: &Value) -> Result<Value> {
                 let Some(CurveKind::Ellipse { c: cp, m, r }) = sk.curves.get(c).map(|x| x.kind.clone()) else {
                     return Err(bad(cmd, "ellipse"));
                 };
-                if ty == "major" {
-                    let d = sk.point(cp).zip(sk.point(m)).map(|(a, b)| a.dist(b)).unwrap_or(0.0);
+                let (pc, pm) = (sk.point(cp).unwrap_or_default(), sk.point(m).unwrap_or_default());
+                if ellipse_axis(&ty, pc, pm, r, text_at) == "major" {
+                    let d = pc.dist(pm);
                     (ConstraintKind::Distance { p: cp, q: m, value: d }, d)
                 } else {
                     (ConstraintKind::Radius { c, value: r }, r)
@@ -2719,6 +2720,18 @@ fn auto_orientation(ty: &str, a: Vec2, b: Vec2, text_at: Option<Vec2>) -> &str {
     } else {
         ty
     }
+}
+
+/// An ellipse alone, with `auto`: text past the ends of the major axis dimensions the major
+/// half-axis, anywhere else the minor one. Measured in the ellipse's own frame and scaled by its
+/// half-axes, so the two sectors meet on the diagonals of its bounding box.
+fn ellipse_axis(ty: &str, c: Vec2, m: Vec2, minor: f64, text_at: Option<Vec2>) -> &str {
+    let Some(t) = text_at.filter(|_| ty == "auto") else { return ty };
+    let d = m - c;
+    let major = d.len();
+    let (along, across) = ((t - c).dot(d) / major, d.cross(t - c) / major);
+    // A degenerate ellipse gives NaN here, which keeps the minor half-axis.
+    if along.abs() / major > across.abs() / minor { "major" } else { ty }
 }
 
 /// Midpoint pairs choose an axis as soon as the text passes their bounding box.

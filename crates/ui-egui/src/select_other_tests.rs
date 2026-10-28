@@ -546,3 +546,19 @@ fn a_preset_chord_held_still_does_not_open_the_list() {
     h.settle();
     assert!(!crate::select_other::is_open(&h.app), "Maya Alt+left held still navigates, it does not open Select Other");
 }
+
+/// Once the list is open, the press it came from does not turn into a drag of the view at
+/// egui's 0.8 s mark: the camera stays put under the open list while the pointer moves to a row.
+#[test]
+fn a_press_that_opened_the_list_does_not_move_the_view_when_it_moves_on() {
+    for (slot, _) in lit_modes() {
+        let (mut h, at) = two_lines();
+        h.step(&json!({"click": {"handle": format!("nav:slot:{slot}")}})).unwrap();
+        let cam = h.app.cam;
+        let (x, y) = (at[0].as_f64().unwrap_or_default(), at[1].as_f64().unwrap_or_default());
+        h.call("ui.drag", json!({"x0": x, "y0": y, "x1": x + 40.0, "y1": y + 40.0, "steps": 8, "hold": 60}));
+        h.settle();
+        assert!(crate::select_other::is_open(&h.app), "{slot}: the list stays open");
+        assert_eq!(h.app.cam, cam, "{slot}: the view did not move under the open list");
+    }
+}

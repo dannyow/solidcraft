@@ -633,7 +633,9 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
             if dragging && app.viewport.axis_drag.is_none() {
                 match button {
                     Some(b) => crate::prefs::nav_mode(app, b, mods),
-                    None if primary_down => primary_nav,
+                    // A press held still that opened Select Other stays its own: egui calls it a
+                    // drag after 0.8 s, and moving to a row must not turn the view under the list.
+                    None if primary_down && !crate::select_other::is_open(app) => primary_nav,
                     None => None,
                 }
             } else {

@@ -239,6 +239,11 @@ impl Harness {
         if let (Some(ppp), Some(v)) = (self.ppp, raw.viewports.get_mut(&egui::ViewportId::ROOT)) {
             v.native_pixels_per_point = Some(ppp);
         }
+        // Recording: the wall clock follows the frame clock (from a fixed instant).
+        #[cfg(test)]
+        if self.on_frame.is_some() {
+            crate::VIRTUAL_MS.set(Some(1.8e12 + self.time * 1000.0));
+        }
         self.app.raw_input_hook_with_taps(&self.ctx, &mut raw, taps);
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(raw, |ui| {

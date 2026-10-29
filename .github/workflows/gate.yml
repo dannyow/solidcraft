@@ -1,4 +1,4 @@
-# GENERATED from upstream .github/workflows/ci.yml at 43a22bed46d2a6f201064e066a0c11c3e757e68c.
+# GENERATED from upstream .github/workflows/ci.yml at 18dc05c83d2329aff6e27568db208e96dc0a5ef9.
 # Do not edit by hand: it is regenerated. The fork's pre-PR gate: upstream's jobs on
 # GitHub's standard runners, run by hand on one branch (see the `on:` block).
 # Rewrites: name: 1; triggers: 1; concurrency group: 1; timeouts: 18; checkout refs: 17; free disk: 14; stickydisk steps dropped: 5; mesa cache via actions/cache: 2; runners (Linux): 17; runners (Windows): 1; cache save on main: 11; cache save on main, shard 1: 1; advisories on dependency changes: 1; advisories step off the nightly: 1; deps from the merge base: 1; nightly jobs: 5; nightly alert dropped: 1; nightly check in ci: 1; nightly env in ci: 1
@@ -619,15 +619,25 @@ jobs:
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-nextest
-      # Fork gate: lavapipe's shader cache in GitHub's cache (upstream has none here; saved at the end).
+      # Fork gate: lavapipe's shader cache in GitHub's cache (upstream has none here; saved at the end, one per CPU).
+      - name: Name the CPU lavapipe compiles for
+        id: mesa-cpu
+        run: |
+          model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
+          flags=$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2- | tr ' ' '\n' \
+            | grep -E '^(sse|ssse|avx|fma|f16c|bmi|lzcnt|abm|popcnt|movbe|adx|sha|gfni|vaes|vpclmulqdq|amx|xop)' | sort | tr '\n' ' ')
+          cpu=$(printf '%s|%s' "$model" "$flags" | sha256sum | cut -c1-12)
+          echo "cpu: $model; AVX-512: $(grep -qw avx512f /proc/cpuinfo && echo yes || echo no); key part: cpu$cpu"
+          echo "flags: $flags"
+          echo "cpu=cpu$cpu" >> "$GITHUB_OUTPUT"
       - name: Restore lavapipe's shader cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/mesa-gpu
-          key: mesa-tests-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: mesa-tests-${{ steps.mesa-cpu.outputs.cpu }}-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            mesa-tests-${{ hashFiles('crates/gpu/**') }}-
-            mesa-tests-
+            mesa-tests-${{ steps.mesa-cpu.outputs.cpu }}-${{ hashFiles('crates/gpu/**') }}-
+            mesa-tests-${{ steps.mesa-cpu.outputs.cpu }}-
       - name: Lavapipe's shader cache before the tests
         if: always()
         run: |
@@ -705,7 +715,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/mesa-gpu
-          key: mesa-tests-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: mesa-tests-${{ steps.mesa-cpu.outputs.cpu }}-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   gpu-path-tests:
     name: GPU path tests (${{ matrix.shard }}/4)
@@ -750,16 +760,26 @@ jobs:
       - name: Size parallel compiles to the job's memory
         run: scripts/ci/build-jobs.sh
       - uses: dtolnay/rust-toolchain@stable
-      # Fork gate: GitHub's cache in place of the sticky disk (saved at the end of the job, one per shard).
+      # Fork gate: GitHub's cache in place of the sticky disk (saved at the end of the job, one per shard and CPU).
+      - name: Name the CPU lavapipe compiles for
+        id: mesa-cpu
+        run: |
+          model=$(grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')
+          flags=$(grep -m1 '^flags' /proc/cpuinfo | cut -d: -f2- | tr ' ' '\n' \
+            | grep -E '^(sse|ssse|avx|fma|f16c|bmi|lzcnt|abm|popcnt|movbe|adx|sha|gfni|vaes|vpclmulqdq|amx|xop)' | sort | tr '\n' ' ')
+          cpu=$(printf '%s|%s' "$model" "$flags" | sha256sum | cut -c1-12)
+          echo "cpu: $model; AVX-512: $(grep -qw avx512f /proc/cpuinfo && echo yes || echo no); key part: cpu$cpu"
+          echo "flags: $flags"
+          echo "cpu=cpu$cpu" >> "$GITHUB_OUTPUT"
       - name: Restore lavapipe's shader cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/mesa-gpu
-          key: mesa-gpu-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: mesa-gpu-${{ steps.mesa-cpu.outputs.cpu }}-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            mesa-gpu-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-
-            mesa-gpu-${{ matrix.shard }}-
-            mesa-gpu-
+            mesa-gpu-${{ steps.mesa-cpu.outputs.cpu }}-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-
+            mesa-gpu-${{ steps.mesa-cpu.outputs.cpu }}-${{ matrix.shard }}-
+            mesa-gpu-${{ steps.mesa-cpu.outputs.cpu }}-
       - name: Lavapipe's shader cache before the tests
         if: always()
         run: |
@@ -812,7 +832,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/mesa-gpu
-          key: mesa-gpu-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: mesa-gpu-${{ steps.mesa-cpu.outputs.cpu }}-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   action-matrix:
     # Every ordinary action on every face, edge, vertex and body of the design corpus, against

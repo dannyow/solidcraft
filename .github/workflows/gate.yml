@@ -576,6 +576,14 @@ jobs:
           restore-keys: |
             mesa-tests-${{ hashFiles('crates/gpu/**') }}-
             mesa-tests-
+      - name: Lavapipe's shader cache before the tests
+        if: always()
+        run: |
+          d=/home/runner/.cache/mesa-gpu
+          mkdir -p "$d"
+          echo "files: $(find "$d" -type f | wc -l), bytes: $(du -sb "$d" | cut -f1)"
+          find "$d" -type f -printf "%s %p\n" | sort -n | tail -n 10
+          touch /tmp/mesa-mark
       - name: Run tests
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -632,6 +640,14 @@ jobs:
           name: junit
           path: ${{ env.CARGO_TARGET_DIR || 'target' }}/nextest/ci/junit.xml
           retention-days: 7
+      - name: Lavapipe's shader cache after the tests
+        if: always()
+        run: |
+          d=/home/runner/.cache/mesa-gpu
+          mkdir -p "$d"
+          echo "files: $(find "$d" -type f | wc -l), bytes: $(du -sb "$d" | cut -f1)"
+          find "$d" -type f -printf "%s %p\n" | sort -n | tail -n 10
+          echo "changed since the restore:"; find /home/runner/.cache/mesa-gpu -type f -newer /tmp/mesa-mark -printf "%s %p\n" | sort -n | tail -n 20
       - name: Save lavapipe's shader cache
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -692,6 +708,14 @@ jobs:
             mesa-gpu-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-
             mesa-gpu-${{ matrix.shard }}-
             mesa-gpu-
+      - name: Lavapipe's shader cache before the tests
+        if: always()
+        run: |
+          d=/home/runner/.cache/mesa-gpu
+          mkdir -p "$d"
+          echo "files: $(find "$d" -type f | wc -l), bytes: $(du -sb "$d" | cut -f1)"
+          find "$d" -type f -printf "%s %p\n" | sort -n | tail -n 10
+          touch /tmp/mesa-mark
       # Main saves the cache; every other run restores it, read-only.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -723,6 +747,14 @@ jobs:
           name: junit-gpu-${{ matrix.shard }}
           path: ${{ env.CARGO_TARGET_DIR || 'target' }}/nextest/ci/junit.xml
           retention-days: 7
+      - name: Lavapipe's shader cache after the tests
+        if: always()
+        run: |
+          d=/home/runner/.cache/mesa-gpu
+          mkdir -p "$d"
+          echo "files: $(find "$d" -type f | wc -l), bytes: $(du -sb "$d" | cut -f1)"
+          find "$d" -type f -printf "%s %p\n" | sort -n | tail -n 10
+          echo "changed since the restore:"; find /home/runner/.cache/mesa-gpu -type f -newer /tmp/mesa-mark -printf "%s %p\n" | sort -n | tail -n 20
       - name: Save lavapipe's shader cache
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

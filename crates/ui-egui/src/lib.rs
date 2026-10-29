@@ -121,6 +121,8 @@ pub mod occurrence_drag;
 mod pattern_arrow_tests;
 #[cfg(test)]
 mod prompt_cards_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod recorder;
 #[cfg(test)]
 mod scale_tests;
 #[cfg(test)]

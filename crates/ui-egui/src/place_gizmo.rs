@@ -223,13 +223,13 @@ fn on_plane(proj: &Proj, pos: Pos2, base: Vec3, n: Vec3) -> Option<Vec3> {
 /// [`show`] draws its own, from the handle's hovered and dragged state, so a hole and a Rest on
 /// the same model show one language for the same action. `id` is the handle's; the motions keep
 /// their state under it. Nothing to step back for, so it is never dimmed.
-pub(crate) fn marker(ui: &egui::Ui, painter: &egui::Painter, id: egui::Id, c: Pos2, hovered: bool, dragging: bool, t: &Tokens) {
+pub(crate) fn marker(ui: &egui::Ui, painter: &egui::Painter, id: egui::Id, c: Pos2, hovered: bool, dragging: bool) {
     let style = CrossStyle {
         hot: MARKER_HOT.run(ui.ctx(), id.with("hot"), hovered || dragging).t,
         active: MARKER_ACTIVE.run(ui.ctx(), id.with("active"), dragging).t,
         alpha: 1.0,
     };
-    crosshair(painter, c, &style, t);
+    crosshair(painter, c, &style, &Tokens::get());
 }
 
 /// Draw the handles and take their drags (after the dialog's own arrow, so the marker wins

@@ -1,7 +1,7 @@
 # GENERATED from upstream .github/workflows/ci.yml at 43a22bed46d2a6f201064e066a0c11c3e757e68c.
 # Do not edit by hand: it is regenerated. The fork's pre-PR gate: upstream's jobs on
 # GitHub's standard runners, run by hand on one branch (see the `on:` block).
-# Rewrites: name: 1; triggers: 1; concurrency group: 1; timeouts: 18; checkout refs: 17; free disk: 14; stickydisk steps dropped: 5; mesa cache via actions/cache: 2; runners (Linux): 17; runners (Windows): 1; cache save on main: 11; cache save on main, shard 1: 1; advisories on dependency changes: 1; deps from the merge base: 1; nightly jobs: 5; nightly alert dropped: 1; nightly check in ci: 1; nightly env in ci: 1
+# Rewrites: name: 1; triggers: 1; concurrency group: 1; timeouts: 18; checkout refs: 17; free disk: 14; stickydisk steps dropped: 5; mesa cache via actions/cache: 2; runners (Linux): 17; runners (Windows): 1; cache save on main: 11; cache save on main, shard 1: 1; advisories on dependency changes: 1; advisories step off the nightly: 1; deps from the merge base: 1; nightly jobs: 5; nightly alert dropped: 1; nightly check in ci: 1; nightly env in ci: 1
 # Fast checks always run; native builds run for code/CI changes.
 # PRs test what they touch; main and nightly test everything. On a pull request the "Select
 # checks" job maps the changed files to workspace packages (scripts/ci/affected.py), adds the
@@ -111,7 +111,7 @@ jobs:
         run: cargo deny --locked check --warn unmaintained advisories bans sources
       # deny.toml denies unmaintained crates; like the nightly, they are reported, not fatal.
       - name: Check advisories for the changed dependencies
-        if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+        if: ${{ !inputs.nightly }}
         run: cargo deny --locked check --warn unmaintained advisories
 
   changes:

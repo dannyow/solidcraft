@@ -148,12 +148,16 @@ pub struct Harness {
     /// The app's request queue, opened by the first queued request.
     queue: Option<std::sync::mpsc::Sender<ControlRequest>>,
     time: f64,
-    size: egui::Vec2,
+    pub(crate) size: egui::Vec2,
     /// The pixels per point of the screen the window is on, as the platform reports it for each
     /// screen (none: not reported, and egui takes 1).
     pub screen_scale: Option<f32>,
     /// The camera as the last `camera` step left it.
     cam_mark: Option<solidcraft_viewport::Camera>,
+    /// Physical pixels per point the frames are laid out for (a Retina screen: 2).
+    pub ppp: Option<f32>,
+    /// Sees every frame's output before it is dropped (the offscreen recorder paints it).
+    pub on_frame: Option<Box<dyn FnMut(&egui::Context, &egui::FullOutput)>>,
 }
 
 impl Default for Harness {
@@ -173,6 +177,12 @@ impl Drop for Harness {
 
 impl Harness {
     pub fn new() -> Harness {
+        Harness::new_with(|_| {})
+    }
+
+    /// A harness that `setup` prepares before its first frame (the recorder installs its
+    /// painter there, so it sees every texture the frames upload).
+    pub fn new_with(setup: impl FnOnce(&mut Harness)) -> Harness {
         // Test-owned reuse store: never the developer's per-user data folder.
         solidcraft_engine::use_import_cache_dir(std::env::temp_dir().join(format!("solidcraft-scenario-imports-{}", std::process::id())));
         solidcraft_ui_text::pin_system_language();
@@ -193,10 +203,13 @@ impl Harness {
             size: egui::vec2(1600.0, 1000.0),
             screen_scale: None,
             cam_mark: None,
+            ppp: None,
+            on_frame: None,
         };
         WIDTHS.with(|m| m.borrow_mut().clear());
         h.install();
         h.ctx.enable_accesskit();
+        setup(&mut h);
         h.frames(3);
         h
     }
@@ -247,12 +260,18 @@ impl Harness {
     /// One frame with what the platform says about its taps (a pen tip lifted, a finger down).
     pub fn frame_with_taps(&mut self, events: Vec<egui::Event>, taps: crate::pencil::PlatformTaps) {
         let mut raw = self.input(events);
+        if let Some(ppp) = self.ppp {
+            raw.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(ppp);
+        }
         self.app.raw_input_hook_with_taps(&self.ctx, &mut raw, taps);
         let app = &mut self.app;
         let mut out = self.ctx.run_ui(raw, |ui| {
             app.logic(ui.ctx());
             app.ui(ui);
         });
+        if let Some(f) = self.on_frame.as_mut() {
+            f(&self.ctx, &out);
+        }
         // Nothing is painted: drop the frame's texture changes.
         out.textures_delta.clear();
         self.opened.extend(out.platform_output.commands.iter().filter_map(|c| match c {

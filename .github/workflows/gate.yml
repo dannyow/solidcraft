@@ -1,4 +1,4 @@
-# GENERATED from upstream .github/workflows/ci.yml at b32448f7130acc6516075066d7f32f6ccdd52d5b.
+# GENERATED from upstream .github/workflows/ci.yml at f1ab19422bd11b9c8298bdf0273844fba336d0f5.
 # Do not edit by hand: it is regenerated. The fork's pre-PR gate: upstream's jobs on
 # GitHub's standard runners, run by hand on one branch (see the `on:` block).
 # Rewrites: name: 1; triggers: 1; concurrency group: 1; timeouts: 17; checkout refs: 17; free disk: 14; stickydisk steps dropped: 5; mesa cache via actions/cache: 2; runners (Linux): 16; runners (Windows): 1; cache save on main: 11; cache save on main, shard 1: 1; nightly jobs: 5; nightly check in ci: 1; nightly env in ci: 1
@@ -384,6 +384,9 @@ jobs:
           cargo test -p xtask ui_containers --locked
       - name: Sorted lists
         run: cargo xtask lists
+      # New UI text must reach every complete catalog; report it here, before review (#8542).
+      - name: Translations in the complete catalogs
+        run: cargo xtask i18n --check
       - name: Agent router and skills cite real files
         run: |
           cargo xtask skills
@@ -569,8 +572,10 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/mesa-gpu
-          key: mesa-tests-${{ hashFiles('crates/gpu/**') }}
-          restore-keys: mesa-tests-
+          key: mesa-tests-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            mesa-tests-${{ hashFiles('crates/gpu/**') }}-
+            mesa-tests-
       - name: Run tests
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -632,7 +637,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/mesa-gpu
-          key: mesa-tests-${{ hashFiles('crates/gpu/**') }}
+          key: mesa-tests-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   gpu-path-tests:
     name: GPU path tests (${{ matrix.shard }}/4)
@@ -677,13 +682,16 @@ jobs:
       - name: Size parallel compiles to the job's memory
         run: scripts/ci/build-jobs.sh
       - uses: dtolnay/rust-toolchain@stable
-      # Fork gate: GitHub's cache in place of the sticky disk (saved at the end of the job).
+      # Fork gate: GitHub's cache in place of the sticky disk (saved at the end of the job, one per shard).
       - name: Restore lavapipe's shader cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/mesa-gpu
-          key: mesa-gpu-${{ hashFiles('crates/gpu/**') }}
-          restore-keys: mesa-gpu-
+          key: mesa-gpu-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            mesa-gpu-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-
+            mesa-gpu-${{ matrix.shard }}-
+            mesa-gpu-
       # Main saves the cache; every other run restores it, read-only.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -720,7 +728,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /home/runner/.cache/mesa-gpu
-          key: mesa-gpu-${{ hashFiles('crates/gpu/**') }}
+          key: mesa-gpu-${{ matrix.shard }}-${{ hashFiles('crates/gpu/**') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   action-matrix:
     # Every ordinary action on every face, edge, vertex and body of the design corpus, against

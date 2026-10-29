@@ -2931,7 +2931,18 @@ pub fn friendly_error(id: &str, e: &str) -> String {
 
 pub fn now_ms() -> f64 {
     use web_time::{SystemTime, UNIX_EPOCH};
+    #[cfg(test)]
+    if let Some(ms) = VIRTUAL_MS.get() {
+        return ms;
+    }
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The wall clock as the offscreen recorder runs it: the harness's frame clock, so status
+    /// messages last as long in a recording as on screen, and recordings repeat exactly.
+    pub(crate) static VIRTUAL_MS: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]

@@ -338,11 +338,11 @@ pub(crate) fn delete_button(app: &mut SolveApp, ui: &mut egui::Ui, id: u64) {
     }
 }
 
-/// The features from design position `from` to the end, only the `shown` positions when the
-/// timeline shows some of the design's features.
+/// The features from design position `from` to the end, only the `shown` positions (ascending)
+/// when the timeline shows some of the design's features.
 fn features_from(app: &SolveApp, from: usize, shown: Option<&[usize]>) -> Vec<u64> {
     let features = app.session.doc.features.iter().enumerate().skip(from);
-    features.filter(|(i, _)| shown.is_none_or(|shown| shown.contains(i))).map(|(_, f)| f.id).collect()
+    features.filter(|(i, _)| shown.is_none_or(|shown| shown.binary_search(i).is_ok())).map(|(_, f)| f.id).collect()
 }
 
 /// In the menu of a feature after the history marker (feature `id` at design position
@@ -1972,6 +1972,9 @@ mod tests {
         h.app.run("select.clear", json!({})).unwrap();
         h.settle();
         h.frames(4);
+        h.step(&json!({"click": {"handle": "timeline:B1"}, "button": "right"})).unwrap();
+        assert!(h.widget("Delete 2 Features After History Marker").is_none(), "B1 is before the marker");
+        h.step(&json!({"key": "Escape"})).unwrap();
         h.step(&json!({"click": {"handle": "timeline:B3"}, "button": "right"})).unwrap();
         h.step(&json!({"widget": "Delete 2 Features After History Marker"})).unwrap();
         h.settle();

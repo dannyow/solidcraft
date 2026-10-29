@@ -9,6 +9,8 @@
 //! - `steps`: scenario steps (see [`crate::scenario`]) and these:
 //!   - `{"record": true | false}`: write every frame from here on (or stop)
 //!   - `{"crop": [x0, y0, x1, y1]}`: points; frames written from here on are cut to it
+//!   - `{"zoom": {"to": [x0, y0, x1, y1] | null, "ms": 600}}`: the clip moves, eased, onto that
+//!     part of the picture (points; null: back to all of it); the driver crops and scales
 //!   - `{"caption": "…"}`: the caption of the frames from here on (`null`: none); the driver
 //!     draws it under the picture
 //!   - `{"glide": AT, "frames"?: 30}`: move the pointer there, eased, one event per frame
@@ -22,7 +24,8 @@
 //! The agent pointer is shown: pointer input moves it, and queued requests are acted out by it.
 //! The app starts as the macOS app does (title bar in the app bar), with the preferences in
 //! `$SOLIDCRAFT_RECORD_PREFS` (the desktop app's saved JSON) when set.
-//! Frames go to `out/frame-00000.png` …, with `out/frames.json` listing each frame's caption.
+//! Frames go to `out/frame-00000.png` …, with `out/frames.json` listing each frame's caption,
+//! crop and input (keys, modifiers, clicks, pointer), from which the driver draws the keys.
 //!
 //! Run: `SOLIDCRAFT_RECORD=script.json SOLIDCRAFT_RECORD_OUT=dir cargo test -p solidcraft-ui-egui
 //! --lib recorder::record -- --ignored --nocapture` (`plan/recorder/record.sh` wraps it).
@@ -49,9 +52,33 @@ struct Tape {
     recording: bool,
     crop: Option<egui::Rect>,
     caption: Option<String>,
+    /// The zoom: from where, to where (points; `None`: the whole picture), over which frames.
+    zoom: Option<Zoom>,
     out: PathBuf,
     frames: Vec<Value>,
     error: Option<String>,
+}
+
+/// An eased move of the part of the picture the clip shows.
+#[derive(Clone, Copy)]
+struct Zoom {
+    from: Option<egui::Rect>,
+    to: Option<egui::Rect>,
+    start: usize,
+    frames: usize,
+}
+
+impl Zoom {
+    /// The rectangle shown at frame `n` (ease-in-out), `None` for the whole picture.
+    fn at(&self, n: usize, whole: egui::Rect) -> Option<egui::Rect> {
+        let t = ((n.saturating_sub(self.start)) as f32 / self.frames.max(1) as f32).clamp(0.0, 1.0);
+        if t >= 1.0 && self.to.is_none() {
+            return None;
+        }
+        let e = t * t * (3.0 - 2.0 * t);
+        let (a, b) = (self.from.unwrap_or(whole), self.to.unwrap_or(whole));
+        Some(egui::Rect::from_min_max(a.min + (b.min - a.min) * e, a.max + (b.max - a.max) * e))
+    }
 }
 
 /// egui's renderer on an offscreen device, with the viewport's resources installed as the app
@@ -242,7 +269,16 @@ impl Recorder {
                     tape.error.get_or_insert(format!("{}: {e}", path.display()));
                 }
                 let caption = tape.caption.clone();
-                tape.frames.push(json!({"file": path.file_name().map(|f| f.to_string_lossy().into_owned()), "caption": caption}));
+                let crop = tape.crop.map(|c| [c.min.x, c.min.y, c.max.x, c.max.y]);
+                let whole = tape.crop.unwrap_or(ctx.content_rect());
+                let view = tape.zoom.and_then(|z| z.at(n, whole)).map(|v| [v.min.x, v.min.y, v.max.x, v.max.y]);
+                tape.frames.push(json!({
+                    "file": path.file_name().map(|f| f.to_string_lossy().into_owned()),
+                    "caption": caption,
+                    "crop": crop,
+                    "view": view,
+                    "input": input(ctx),
+                }));
             }));
         });
         if let Some(e) = failed {
@@ -287,6 +323,18 @@ impl Recorder {
                 (Some(x0), Some(y0), Some(x1), Some(y1)) => Some(egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1))),
                 _ => None,
             };
+        } else if let Some(z) = s.get("zoom") {
+            // {"to": [x0, y0, x1, y1] | null, "ms": 600}: from what the clip shows now.
+            let r = z.get("to").and_then(Value::as_array).and_then(|a| {
+                let n: Vec<f32> = a.iter().filter_map(Value::as_f64).map(|v| v as f32).collect();
+                (n.len() == 4).then(|| egui::Rect::from_min_max(egui::pos2(n[0], n[1]), egui::pos2(n[2], n[3])))
+            });
+            let ms = z.get("ms").and_then(Value::as_f64).unwrap_or(600.0).clamp(0.0, 10_000.0);
+            let mut tape = self.tape.borrow_mut();
+            let n = tape.frames.len();
+            let whole = tape.crop.unwrap_or(egui::Rect::from_min_size(egui::Pos2::ZERO, self.h.size));
+            let from = tape.zoom.and_then(|z| z.at(n, whole));
+            tape.zoom = Some(Zoom { from, to: r, start: n, frames: (ms * 60.0 / 1000.0).round() as usize });
         } else if let Some(c) = s.get("caption") {
             self.tape.borrow_mut().caption = c.as_str().map(str::to_string);
         } else if let Some(at) = s.get("glide") {
@@ -341,6 +389,42 @@ impl Recorder {
     }
 }
 
+/// What the frame's input was, for the keys and clicks the driver draws over the picture:
+/// modifiers held, keys pressed (with their modifiers), text typed, button presses, buttons
+/// held and the pointer, in points.
+fn input(ctx: &egui::Context) -> Value {
+    fn mods(m: egui::Modifiers) -> Value {
+        // The harness's primary modifier is Command on macOS.
+        json!({"cmd": m.command || m.mac_cmd, "ctrl": m.ctrl && !m.command && !m.mac_cmd, "alt": m.alt, "shift": m.shift})
+    }
+    ctx.input(|i| {
+        let (mut keys, mut text, mut presses) = (Vec::new(), String::new(), Vec::new());
+        for e in &i.events {
+            match e {
+                egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } => {
+                    keys.push(json!({"key": key.name(), "mods": mods(*modifiers)}))
+                }
+                egui::Event::Text(t) => text.push_str(t),
+                egui::Event::PointerButton { pos, button, pressed: true, .. } => {
+                    presses.push(json!({"at": [pos.x, pos.y], "button": format!("{button:?}").to_lowercase()}))
+                }
+                _ => {}
+            }
+        }
+        json!({
+            "mods": mods(i.modifiers),
+            "keys": keys,
+            "text": text,
+            "presses": presses,
+            "down": {
+                "primary": i.pointer.button_down(egui::PointerButton::Primary),
+                "secondary": i.pointer.button_down(egui::PointerButton::Secondary),
+            },
+            "pointer": i.pointer.latest_pos().map(|p| [p.x, p.y]),
+        })
+    })
+}
+
 fn write_png(img: &image::RgbaImage, path: &Path) -> Result<(), String> {
     use image::ImageEncoder;
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
@@ -359,6 +443,8 @@ pub(crate) fn record(script: &Path, prefs: Option<&str>, out: &Path) -> Result<u
     let n = |k: &str, i: usize, d: f64| v.get(k).and_then(|a| a.get(i)).and_then(Value::as_f64).unwrap_or(d) as f32;
     let size = egui::vec2(n("size", 0, 1600.0), n("size", 1, 1000.0));
     let ppp = v.get("ppp").and_then(Value::as_f64).unwrap_or(2.0) as f32;
+    // Keys and clicks drawn over the clip (`"keys": false`: none).
+    let keys = v.get("keys").and_then(Value::as_bool).unwrap_or(true);
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     for e in std::fs::read_dir(out).map_err(|e| e.to_string())?.flatten() {
         if e.file_name().to_string_lossy().starts_with("frame-") {
@@ -371,7 +457,7 @@ pub(crate) fn record(script: &Path, prefs: Option<&str>, out: &Path) -> Result<u
     }
     let frames = std::mem::take(&mut rec.tape.borrow_mut().frames);
     let count = frames.len();
-    std::fs::write(out.join("frames.json"), serde_json::to_string_pretty(&json!({"ppp": ppp, "frames": frames})).unwrap_or_default())
+    std::fs::write(out.join("frames.json"), serde_json::to_string(&json!({"ppp": ppp, "keys": keys, "frames": frames})).unwrap_or_default())
         .map_err(|e| e.to_string())?;
     Ok(count)
 }

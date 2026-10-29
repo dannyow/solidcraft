@@ -17,6 +17,8 @@
 //!   - `{"press": AT?}`, `{"drag_to": AT, "frames"?: 30}`, `{"release": true}`: an eased drag
 //!   - `{"still": n}`: n frames with nothing happening; `{"pause": ms}`: the same in milliseconds
 //!
+//! While text is typed the drawn agent pointer steps aside (right of where it points), so its
+//! tag leaves the value box readable; it comes back before the pointer acts again.
 //! Before a harness step that acts somewhere (`click`, `move`, `hold`, `drag`, `widget`) the
 //! pointer glides there from where it was, so nothing jumps; `queued` requests are acted out by
 //! the agent pointer itself.
@@ -227,6 +229,9 @@ struct Recorder {
     tape: Rc<RefCell<Tape>>,
     /// Where the pointer was last sent.
     pointer: egui::Pos2,
+    /// The drawn agent pointer stepped aside while text is typed (so its tag leaves the value
+    /// box readable); the input pointer stays where it is.
+    aside: bool,
 }
 
 impl Recorder {
@@ -287,7 +292,7 @@ impl Recorder {
         let mut h = h;
         // A frame so the renderer has the fonts before anything is recorded.
         h.frames(2);
-        Ok(Recorder { h, tape, pointer: egui::pos2(size.x / 2.0, size.y / 2.0) })
+        Ok(Recorder { h, tape, pointer: egui::pos2(size.x / 2.0, size.y / 2.0), aside: false })
     }
 
     /// Eased pointer events from where the pointer is to `to`, one per frame (button held or not).
@@ -300,6 +305,32 @@ impl Recorder {
         }
         self.pointer = to;
         self.h.settle();
+    }
+
+    /// Glide only the drawn agent pointer to `to` (no input events), eased.
+    fn glide_drawn(&mut self, to: egui::Pos2, frames: usize) {
+        let from = self.h.app.agent.pos.unwrap_or(self.pointer);
+        for k in 1..=frames.max(1) {
+            let t = k as f32 / frames.max(1) as f32;
+            self.h.app.agent.pos = Some(from + (to - from) * (t * t * (3.0 - 2.0 * t)));
+            self.h.frame();
+        }
+    }
+
+    /// Typing: the drawn pointer steps aside, right of the value it points at.
+    fn step_aside(&mut self) {
+        if !self.aside {
+            self.aside = true;
+            self.glide_drawn(self.pointer + egui::vec2(84.0, -26.0), 12);
+        }
+    }
+
+    /// Before the pointer acts again, the drawn pointer comes back to it.
+    fn step_back(&mut self) {
+        if self.aside {
+            self.aside = false;
+            self.glide_drawn(self.pointer, 12);
+        }
     }
 
     fn point(&mut self, v: &Value) -> Result<egui::Pos2, String> {
@@ -338,9 +369,11 @@ impl Recorder {
         } else if let Some(c) = s.get("caption") {
             self.tape.borrow_mut().caption = c.as_str().map(str::to_string);
         } else if let Some(at) = s.get("glide") {
+            self.step_back();
             let to = self.point(at)?;
             self.glide(to, frames(GLIDE));
         } else if let Some(at) = s.get("press") {
+            self.step_back();
             if !at.is_boolean() {
                 let to = self.point(at)?;
                 self.glide(to, frames(GLIDE));
@@ -370,6 +403,12 @@ impl Recorder {
             } else {
                 None
             };
+            if target.is_some() {
+                self.step_back();
+            }
+            if s.get("text").is_some() {
+                self.step_aside();
+            }
             if let Some(to) = target
                 && (to - self.pointer).length() > 0.5
             {

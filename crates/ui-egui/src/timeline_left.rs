@@ -671,7 +671,7 @@ fn select_item(app: &mut SolveApp, ui: &egui::Ui, item: TimelineItem, order: &[T
     }
 }
 
-fn selection_actions(app: &mut SolveApp, ui: &mut egui::Ui, groups: &[solidcraft_engine::doc::TimelineGroup], clicked: Option<u64>) {
+fn selection_actions(app: &mut SolveApp, ui: &mut egui::Ui, groups: &[solidcraft_engine::doc::TimelineGroup], feature_menu: bool) {
     let features = selected_feature_ids(app);
     let selected_groups = app.tree.picked_timeline_groups.clone();
     let has_selection = !features.is_empty() || !selected_groups.is_empty();
@@ -733,8 +733,9 @@ fn selection_actions(app: &mut SolveApp, ui: &mut egui::Ui, groups: &[solidcraft
             ui.close();
         }
     }
-    // A selected feature's own Delete already deletes the selection ([`delete_button`]).
-    if !features.is_empty() && !clicked.is_some_and(|id| features.contains(&id)) {
+    // A feature's menu has its own Delete, which deletes the selection ([`delete_button`]): a
+    // right-click on a feature outside the selection selects that feature first.
+    if !features.is_empty() && !feature_menu {
         ui.separator();
         if crate::context_menu::button(ui, "Delete Selected Features…", "delete").clicked() {
             delete_features(app, features);
@@ -1076,7 +1077,7 @@ fn vertical_group_row(
             ui.close();
         }
         ui.separator();
-        selection_actions(app, ui, groups, None);
+        selection_actions(app, ui, groups, false);
     });
     open
 }
@@ -1497,7 +1498,7 @@ fn feature_row(app: &mut SolveApp, ui: &mut egui::Ui, rows: &mut Rows, index: us
         clipboard_buttons(app, ui, id);
         message_button(app, ui, id);
         ui.separator();
-        selection_actions(app, ui, groups, Some(id));
+        selection_actions(app, ui, groups, true);
         ui.separator();
         delete_button(app, ui, id);
         delete_after_marker_button(app, ui, id, index, marker);

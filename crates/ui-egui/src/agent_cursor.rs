@@ -157,6 +157,9 @@ pub struct AgentCursor {
     ripples: Vec<(Pos2, f64)>,
     /// The view before a followed sketch (restored when it finishes).
     saved_view: Option<solidcraft_engine::render::Camera>,
+    /// The offscreen recorder draws its own pointer: this one acts as usual but is not painted.
+    #[cfg(test)]
+    pub(crate) hidden: bool,
 }
 
 impl AgentCursor {
@@ -477,6 +480,12 @@ use crate::icons::pointer::agent;
 /// Draw the pointer, its "Agent" tag and the click ripples over everything.
 pub fn paint(app: &SolveApp, ctx: &egui::Context) {
     if !app.ui.agent_cursor.show {
+        return;
+    }
+    #[cfg(test)]
+    if app.agent.hidden {
+        // Where the recorder draws its pointer.
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("sc_agent_pos"), app.agent.pos));
         return;
     }
     let Some(p) = app.agent.pos else { return };

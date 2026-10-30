@@ -6,6 +6,10 @@
 //! A recording script is a JSON object:
 //! - `size`: `[w, h]` in points (default 1600 x 1000), `ppp`:
 //!   physical pixels per point (default 2, a Retina screen)
+//! - `pointer`: `"system"` (default: the driver draws a plain pointer, shaped by the cursor the
+//!   app asks for each frame) or `"agent"` (the app's agent pointer with its tag)
+//! - `keys`: how the driver shows keys: `"hud"` (default: one dark box in the picture), `"band"`
+//!   (keycaps in the caption band) or `false`; `keys_at`: `"lower"` (default) or `"centre"`
 //! - `steps`: scenario steps (see [`crate::scenario`]) and these:
 //!   - `{"record": true | false}`: write every frame from here on (or stop)
 //!   - `{"crop": [x0, y0, x1, y1]}`: points; frames written from here on are cut to it
@@ -17,13 +21,14 @@
 //!   - `{"press": AT?}`, `{"drag_to": AT, "frames"?: 30}`, `{"release": true}`: an eased drag
 //!   - `{"still": n}`: n frames with nothing happening; `{"pause": ms}`: the same in milliseconds
 //!
-//! While text is typed the drawn agent pointer steps aside (right of where it points), so its
-//! tag leaves the value box readable; it comes back before the pointer acts again.
+//! With the agent pointer, while text is typed the drawn pointer steps aside (right of where it
+//! points), so its tag leaves the value box readable; it comes back before the pointer acts again.
 //! Before a harness step that acts somewhere (`click`, `move`, `hold`, `drag`, `widget`) the
 //! pointer glides there from where it was, so nothing jumps; `queued` requests are acted out by
 //! the agent pointer itself.
 //!
-//! The agent pointer is shown: pointer input moves it, and queued requests are acted out by it.
+//! The agent pointer is on: pointer input moves it, and queued requests are acted out by it. With
+//! the system pointer it is not painted, and each frame logs where it is and the cursor icon.
 //! The app starts as the macOS app does (title bar in the app bar), with the preferences in
 //! `$SOLIDCRAFT_RECORD_PREFS` (the desktop app's saved JSON) when set.
 //! Frames go to `out/frame-00000.png` …, with `out/frames.json` listing each frame's caption,
@@ -232,10 +237,12 @@ struct Recorder {
     /// The drawn agent pointer stepped aside while text is typed (so its tag leaves the value
     /// box readable); the input pointer stays where it is.
     aside: bool,
+    /// The driver draws the pointer (the agent pointer is not painted, so nothing steps aside).
+    system: bool,
 }
 
 impl Recorder {
-    fn new(size: egui::Vec2, ppp: f32, prefs: Option<&str>, out: &Path) -> Result<Recorder, String> {
+    fn new(size: egui::Vec2, ppp: f32, system: bool, prefs: Option<&str>, out: &Path) -> Result<Recorder, String> {
         let tape = Rc::new(RefCell::new(Tape { out: out.to_path_buf(), ..Default::default() }));
         let mut failed = None;
         let h = Harness::new_with(|h| {
@@ -247,6 +254,7 @@ impl Recorder {
                 h.app.load_prefs(prefs);
             }
             h.app.ui.agent_cursor.show = true;
+            h.app.agent.hidden = system;
             let mut painter = match Painter::install(&mut h.app) {
                 Ok(p) => p,
                 Err(e) => {
@@ -283,6 +291,10 @@ impl Recorder {
                     "crop": crop,
                     "view": view,
                     "input": input(ctx),
+                    "cursor": {
+                        "at": ctx.data(|d| d.get_temp::<Option<egui::Pos2>>(egui::Id::new("sc_agent_pos"))).flatten().map(|p| [p.x, p.y]),
+                        "icon": format!("{:?}", full.platform_output.cursor_icon),
+                    },
                 }));
             }));
         });
@@ -292,7 +304,7 @@ impl Recorder {
         let mut h = h;
         // A frame so the renderer has the fonts before anything is recorded.
         h.frames(2);
-        Ok(Recorder { h, tape, pointer: egui::pos2(size.x / 2.0, size.y / 2.0), aside: false })
+        Ok(Recorder { h, tape, pointer: egui::pos2(size.x / 2.0, size.y / 2.0), aside: false, system })
     }
 
     /// Eased pointer events from where the pointer is to `to`, one per frame (button held or not).
@@ -319,7 +331,7 @@ impl Recorder {
 
     /// Typing: the drawn pointer steps aside, right of the value it points at.
     fn step_aside(&mut self) {
-        if !self.aside {
+        if !self.aside && !self.system {
             self.aside = true;
             self.glide_drawn(self.pointer + egui::vec2(84.0, -26.0), 12);
         }
@@ -450,10 +462,13 @@ fn input(ctx: &egui::Context) -> Value {
                 _ => {}
             }
         }
+        let mut held: Vec<&str> = i.keys_down.iter().map(|k| k.name()).collect();
+        held.sort_unstable();
         json!({
             "mods": mods(i.modifiers),
             "keys": keys,
             "text": text,
+            "held": held,
             "presses": presses,
             "down": {
                 "primary": i.pointer.button_down(egui::PointerButton::Primary),
@@ -482,22 +497,38 @@ pub(crate) fn record(script: &Path, prefs: Option<&str>, out: &Path) -> Result<u
     let n = |k: &str, i: usize, d: f64| v.get(k).and_then(|a| a.get(i)).and_then(Value::as_f64).unwrap_or(d) as f32;
     let size = egui::vec2(n("size", 0, 1600.0), n("size", 1, 1000.0));
     let ppp = v.get("ppp").and_then(Value::as_f64).unwrap_or(2.0) as f32;
-    // Keys and clicks drawn over the clip (`"keys": false`: none).
-    let keys = v.get("keys").and_then(Value::as_bool).unwrap_or(true);
+    // Keys drawn over the clip: "hud" (also `true`), "band" or none (`false`); where the box sits.
+    let keys = match v.get("keys") {
+        Some(Value::Bool(false)) => "off",
+        Some(Value::String(k)) if k == "band" || k == "off" => k.as_str(),
+        _ => "hud",
+    };
+    let keys_at = if v.get("keys_at").and_then(Value::as_str) == Some("centre") { "centre" } else { "lower" };
+    let system = v.get("pointer").and_then(Value::as_str) != Some("agent");
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     for e in std::fs::read_dir(out).map_err(|e| e.to_string())?.flatten() {
         if e.file_name().to_string_lossy().starts_with("frame-") {
             let _ = std::fs::remove_file(e.path());
         }
     }
-    let mut rec = Recorder::new(size, ppp, prefs, out)?;
+    let mut rec = Recorder::new(size, ppp, system, prefs, out)?;
     for (i, s) in v.get("steps").and_then(Value::as_array).ok_or("a recording has `steps`")?.iter().enumerate() {
         rec.step(s).map_err(|e| format!("step {i}: {e}"))?;
     }
     let frames = std::mem::take(&mut rec.tape.borrow_mut().frames);
     let count = frames.len();
-    std::fs::write(out.join("frames.json"), serde_json::to_string(&json!({"ppp": ppp, "keys": keys, "frames": frames})).unwrap_or_default())
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        out.join("frames.json"),
+        serde_json::to_string(&json!({
+            "ppp": ppp,
+            "keys": keys,
+            "keys_at": keys_at,
+            "pointer": if system { "system" } else { "agent" },
+            "frames": frames,
+        }))
+        .unwrap_or_default(),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(count)
 }
 

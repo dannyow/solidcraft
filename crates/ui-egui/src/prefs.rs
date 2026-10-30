@@ -1524,6 +1524,10 @@ struct Snapshot {
     toolbar: serde_json::Value,
     favourites: Vec<String>,
     profile: Option<String>,
+    /// The preferences just before the first Restore Defaults or settings profile since the
+    /// snapshot ([`hold_recorded`]): from then on the recorded fields compare against these, and
+    /// Cancel puts them back.
+    held: Option<Prefs>,
 }
 
 impl Snapshot {
@@ -1545,12 +1549,13 @@ impl Snapshot {
             toolbar: app.toolbar_custom.prefs(),
             favourites: app.sbox.pinned.clone(),
             profile: app.settings_profiles.active.clone(),
+            held: None,
         }
     }
     fn restore(mut self, app: &mut SolveApp) {
         let graphics = (app.preferences.msaa, app.preferences.window_system.clone(), app.preferences.graphics_adapter.clone());
         let units_changed = app.preferences.default_units != self.prefs.default_units;
-        keep_recorded(&app.preferences, &mut self.prefs);
+        keep_recorded(self.held.as_ref().unwrap_or(&app.preferences), &mut self.prefs);
         app.preferences = self.prefs;
         sync_surface_analysis(app);
         if units_changed {
@@ -1599,11 +1604,13 @@ impl Snapshot {
             toolbar,
             favourites,
             profile,
+            held,
         } = self;
-        // Cloned only when something differs, to leave out what the app recorded meanwhile.
-        let same = *prefs == app.preferences || {
+        // Cloned only when something differs, to take the recorded fields from what Cancel
+        // would leave: the app's own now, or the held ones.
+        let same = (held.is_none() && *prefs == app.preferences) || {
             let mut prefs = prefs.clone();
-            keep_recorded(&app.preferences, &mut prefs);
+            keep_recorded(held.as_ref().unwrap_or(&app.preferences), &mut prefs);
             prefs == app.preferences
         };
         same && *layout == app.ui.layout
@@ -1632,7 +1639,8 @@ fn apply_pending(app: &SolveApp) -> bool {
 
 /// Copy into `prefs` what the app records in the preferences by itself while the dialog is open:
 /// panel sizes, folds and sides, the render library's lists, the chat's models, update
-/// bookkeeping. These are no change for Apply, and Cancel keeps them as they are now. A field
+/// bookkeeping. These are no change for Apply, and Cancel keeps them as they are now, unless
+/// Restore Defaults or a settings profile was pressed since ([`hold_recorded`]). A field
 /// belongs here only when code outside the dialog writes it while the dialog can be open and
 /// nothing in the dialog changes it other than Restore Defaults or a settings profile; any
 /// other field is a setting, compared and put back.
@@ -1663,6 +1671,17 @@ fn keep_recorded(now: &Prefs, prefs: &mut Prefs) {
         agent_models,
         space_mouse_offered,
     );
+}
+
+/// Before Restore Defaults or a settings profile, which also set recorded fields such as panel
+/// widths: the first such press since the snapshot keeps the preferences as they are, so Cancel
+/// puts the panels back as they were just before it.
+pub(crate) fn hold_recorded(app: &mut SolveApp) {
+    if let Some(snapshot) = app.prefs_window.snapshot.as_mut()
+        && snapshot.held.is_none()
+    {
+        snapshot.held = Some(app.preferences.clone());
+    }
 }
 
 /// The colour theme (#2255): Dark, Light, System, the built-in theme files and the imported
@@ -1883,6 +1902,7 @@ fn ui_font_row(app: &mut SolveApp, ui: &mut egui::Ui) {
 
 /// Restore Defaults for one page.
 fn defaults(app: &mut SolveApp, page: usize) {
+    hold_recorded(app);
     let (msaa, window_system, adapter) = (app.preferences.msaa, app.preferences.window_system.clone(), app.preferences.graphics_adapter.clone());
     let units = app.preferences.default_units.clone();
     reset_preferences(&mut app.preferences, page);
@@ -6964,6 +6984,26 @@ mod tests {
         assert!(app.preferences.look_at_anim);
         control(&mut app, &json!({"button": "ok"})).unwrap();
         assert!(!app.prefs_window.open);
+
+        // A panel resized beside the dialog is no change, but Restore Defaults resets panels
+        // too: that is a change, and Cancel puts them back as they were just before the press.
+        control(&mut app, &json!({"open": "Interface"})).unwrap();
+        app.preferences.browser_width = 300.0;
+        assert_eq!(control(&mut app, &json!({})).unwrap()["apply_enabled"], false, "a resized panel is no change");
+        let v = control(&mut app, &json!({"button": "defaults"})).unwrap();
+        assert_eq!(app.preferences.browser_width, DEFAULT_BROWSER_WIDTH);
+        assert_eq!(v["apply_enabled"], true, "Defaults changed only the panel, and that is a change");
+        control(&mut app, &json!({"button": "cancel"})).unwrap();
+        assert_eq!(app.preferences.browser_width, 300.0, "Cancel undoes the reset");
+
+        // The same for a settings profile, which holds the browser's width too.
+        app.run("settings.profile.save", json!({"name": "Narrow"})).unwrap();
+        control(&mut app, &json!({"open": "General"})).unwrap();
+        app.preferences.browser_width = 320.0;
+        app.run("settings.profile.apply", json!({"name": "Narrow"})).unwrap();
+        assert_eq!(app.preferences.browser_width, 300.0);
+        control(&mut app, &json!({"button": "cancel"})).unwrap();
+        assert_eq!(app.preferences.browser_width, 320.0, "Cancel puts back the width from just before the profile");
 
         // File and Help › Keyboard Shortcuts open the same dialog at its page.
         app.keymap.open = true;

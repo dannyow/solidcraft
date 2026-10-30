@@ -246,6 +246,7 @@ fn shortcut_keys(v: &Value) -> Option<Value> {
 /// Apply a checked profile: its themes, each preference (through [`prefs::set`]), the
 /// shortcuts, the favourites and the toolbar. Returns the preferences that were refused.
 fn apply(app: &mut SolveApp, doc: &Value) -> Vec<String> {
+    prefs::hold_recorded(app);
     let mut theme_ids = std::collections::BTreeMap::new();
     for t in doc.get("themes").and_then(Value::as_array).into_iter().flatten() {
         let Ok(mut theme) = theme_files::from_value(t) else { continue };

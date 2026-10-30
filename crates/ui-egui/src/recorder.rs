@@ -532,8 +532,94 @@ pub(crate) fn record(script: &Path, prefs: Option<&str>, out: &Path) -> Result<u
     Ok(count)
 }
 
+/// Capture patch (private): every Preferences page whole, in a tall virtual window, as a PNG cut
+/// to the window, an SVG of the same frame and the rects and handles the frame published.
+pub(crate) fn prefs_pages(out: &Path, height: f32) -> Result<Vec<Value>, String> {
+    std::fs::create_dir_all(out).map_err(|e| e.to_string())?;
+    let mut pages = Vec::new();
+    for (index, name) in crate::prefs::PAGES.iter().enumerate() {
+        let slug = name.to_lowercase().replace(' ', "-");
+        let mut rec = Recorder::new(egui::vec2(1600.0, height), 1.0, true, None, out)?;
+        rec.h.app.ui.agent_cursor.show = false;
+        crate::prefs::open_at(&mut rec.h.app, index);
+        // The body takes the height the page drew a frame before, so let it settle.
+        rec.h.frames(6);
+        let window = crate::scenario::rect_of("dialog:window").ok_or("no Preferences window")?;
+        // A page taller than the screen goes in tiles: the window moves up one tile at a time.
+        let tile = height - 100.0;
+        let tiles = (window.height() / tile).ceil().max(1.0) as usize;
+        let mut images = Vec::new();
+        for k in 0..tiles {
+            let top = -(k as f32) * tile;
+            rec.h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("sc_tall_window_top"), top));
+            rec.h.frames(3);
+            let w = crate::scenario::rect_of("dialog:window").ok_or("no Preferences window")?;
+            let crop = egui::Rect::from_min_max(egui::pos2(w.min.x, w.min.y.max(0.0)), egui::pos2(w.max.x, w.max.y.min(tile)));
+            {
+                let mut tape = rec.tape.borrow_mut();
+                tape.crop = Some(crop);
+                tape.recording = true;
+            }
+            rec.h.frames(1);
+            rec.tape.borrow_mut().recording = false;
+            let frame = rec.tape.borrow().frames.last().and_then(|f| f["file"].as_str().map(str::to_string)).ok_or("no frame")?;
+            let img = image::open(out.join(&frame)).map_err(|e| e.to_string())?.to_rgba8();
+            let _ = std::fs::remove_file(out.join(&frame));
+            images.push(img);
+            if k + 1 < tiles {
+                let svg = out.join(format!("{slug}.tile{k}.svg"));
+                rec.h.call("ui.export_svg", json!({"path": svg.to_string_lossy()}));
+            }
+        }
+        let width = images.iter().map(|i| i.width()).max().unwrap_or(0);
+        let total: u32 = images.iter().map(|i| i.height()).sum();
+        let mut whole = image::RgbaImage::new(width, total);
+        let mut y = 0;
+        for img in &images {
+            image::imageops::replace(&mut whole, img, 0, i64::from(y));
+            y += img.height();
+        }
+        let window = egui::Rect::from_min_size(egui::pos2(window.min.x, 0.0), window.size());
+        let rects: Vec<Value> = crate::scenario::rects("")
+            .into_iter()
+            .map(|(n, r)| json!({"name": n, "rect": [r.min.x, r.min.y, r.max.x, r.max.y]}))
+            .collect();
+        let handles: Vec<Value> = crate::scenario::handles("").into_iter().map(|(n, p)| json!({"name": n, "at": [p.x, p.y]})).collect();
+        write_png(&whole, &out.join(format!("{slug}.png")))?;
+        let svg = out.join(format!("{slug}{}.svg", if tiles > 1 { format!(".tile{}", tiles - 1) } else { String::new() }));
+        let exported = rec.h.call("ui.export_svg", json!({"path": svg.to_string_lossy()}));
+        if exported["ok"] != true {
+            return Err(format!("{name}: {exported}"));
+        }
+        let page = json!({
+            "page": name,
+            "slug": slug,
+            "window": [window.min.x, window.min.y, window.max.x, window.max.y],
+            "tiles": tiles,
+            "tile": tile,
+            "rects": rects,
+            "handles": handles,
+        });
+        std::fs::write(out.join(format!("{slug}.json")), serde_json::to_string_pretty(&page).unwrap_or_default()).map_err(|e| e.to_string())?;
+        pages.push(page);
+    }
+    Ok(pages)
+}
+
 #[cfg(test)]
 mod tests {
+    /// Capture patch: `SOLIDCRAFT_TALL_PAGES=1 SOLIDCRAFT_PREFS_OUT=dir`, every Preferences page whole.
+    #[test]
+    #[ignore = "a tool: run with SOLIDCRAFT_TALL_PAGES and SOLIDCRAFT_PREFS_OUT set"]
+    fn prefs_pages() {
+        let Some(out) = std::env::var_os("SOLIDCRAFT_PREFS_OUT") else { panic!("set SOLIDCRAFT_PREFS_OUT") };
+        let height = std::env::var("SOLIDCRAFT_PREFS_HEIGHT").ok().and_then(|h| h.parse().ok()).unwrap_or(12000.0);
+        match super::prefs_pages(out.as_ref(), height) {
+            Ok(pages) => eprintln!("captured {} pages", pages.len()),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
     /// Records `$SOLIDCRAFT_RECORD` (a recording script) into `$SOLIDCRAFT_RECORD_OUT`.
     #[test]
     #[ignore = "a tool: run with SOLIDCRAFT_RECORD set"]

@@ -1155,6 +1155,15 @@ impl<'a> Window<'a> {
             (None, Some((pivot, pos))) => window.pivot(pivot).default_pos(pos),
             (None, None) => window.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center() - vec2(0.0, row_height() * 2.5)),
         };
+        // Capture patch: a tall page's window sits where the recorder puts its top, so a page taller
+        // than one texture is captured in tiles.
+        let window = if self.page_chrome && super::preferences::tall_pages() {
+            let top = ctx.data(|d| d.get_temp::<f32>(egui::Id::new("sc_tall_window_top"))).unwrap_or(0.0);
+            let left = ((ctx.content_rect().width() - self.width) / 2.0).round();
+            window.pivot(egui::Align2::LEFT_TOP).current_pos(egui::pos2(left, top)).constrain(false)
+        } else {
+            window
+        };
         let shown = window.show(ctx, |ui| {
             let result = add(ui);
             super::Container::finish_content(ui, frame);
@@ -1196,8 +1205,16 @@ fn page_list_sized<S>(
     // The search strip, the gap under it, and the following item spacing sit above the page.
     // They must not eat the rows the page already had, or the graphics checkboxes fall out of view.
     let header_band = if header.is_some() { t.control_height + t.form_gap_y + t.space_8 } else { 0.0 };
-    let height = (dimension(ui.ctx().content_rect().height()) - t.form_header_height - t.form_footer_height - t.space_24 * 3.0)
-        .clamp(0.0, t.control_height * rows + header_band);
+    let room = dimension(ui.ctx().content_rect().height()) - t.form_header_height - t.form_footer_height - t.space_24 * 3.0;
+    // Capture patch (private, never upstream): with SOLIDCRAFT_TALL_PAGES set the body is as tall as
+    // the page drew last frame, so a tall virtual window shows the whole page without scrolling.
+    let height = if super::preferences::tall_pages() {
+        let drawn = ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::new("sc_tall_page_height"))).unwrap_or(t.control_height * rows);
+        // Never shorter than the window opens on a usual screen, so the page list stays whole.
+        (drawn + padding.sum().y + header_band).max(t.control_height * rows + header_band).clamp(0.0, room.max(0.0))
+    } else {
+        room.clamp(0.0, t.control_height * rows + header_band)
+    };
     let (body, _) = ui.allocate_exact_size(vec2(dimension(ui.available_width()), height), egui::Sense::hover());
     let width = if body.width() + 2.0 * super::NAV_BORDER < WINDOW_PAGES_NARROW_AT {
         WINDOW_PAGES_NARROW_WIDTH
@@ -1277,7 +1294,13 @@ fn page_list_sized<S>(
             }
             let force_scroll = header.is_some() && crate::prefs_search::force_scroll(ui.ctx());
             if let Some(page) = pages.get(*selected) {
-                if page.scroll || force_scroll {
+                if super::preferences::tall_pages() {
+                    let top = ui.next_widget_position().y;
+                    (page.draw)(ui, state);
+                    let drawn = ui.min_rect().bottom() - top;
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("sc_tall_page_height"), drawn));
+                    scenario::publish_rect("dialog:page_body", content);
+                } else if page.scroll || force_scroll {
                     let scroll = super::settings_scroll(ui, ("sc_prefs_page", *selected), |ui| (page.draw)(ui, state));
                     scenario::publish_rect("dialog:page_body", scroll.inner_rect);
                 } else {

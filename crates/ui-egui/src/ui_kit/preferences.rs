@@ -9,10 +9,28 @@ use egui::{Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, pos2, vec2}
 
 pub(super) const PAGE_SCROLL_GUTTER: &str = "sc_page_scroll_gutter";
 
+/// Capture patch (private, never upstream): Preferences pages draw whole, without scrolling.
+pub(crate) fn tall_pages() -> bool {
+    std::env::var_os("SOLIDCRAFT_TALL_PAGES").is_some()
+}
+
 /// Page scroller keeps content aligned while centring its bar in the window's right inset.
 /// Nested pages (including Shortcuts) inherit the same gutter and height contract.
 pub(crate) fn settings_scroll<R>(ui: &mut Ui, id: impl egui::AsIdSalt, add: impl FnOnce(&mut Ui) -> R) -> egui::scroll_area::ScrollAreaOutput<R> {
     let t = Tokens::get();
+    if tall_pages() {
+        // Capture patch: no inner scroll, the page draws at its full length.
+        let top = ui.next_widget_position();
+        let inner = add(ui);
+        let rect = Rect::from_min_max(top, pos2(top.x + dimension(ui.available_width()), ui.min_rect().bottom()));
+        return egui::scroll_area::ScrollAreaOutput {
+            inner,
+            id: ui.id(),
+            state: Default::default(),
+            content_size: rect.size(),
+            inner_rect: rect,
+        };
+    }
     let gutter = ui.stack().iter().find_map(|node| node.tags().get_downcast::<f32>(PAGE_SCROLL_GUTTER)).copied().unwrap_or(0.0);
     let width = dimension(ui.available_width());
     let height = if ui.available_height().is_finite() { dimension(ui.available_height()) } else { t.control_height * 16.0 };

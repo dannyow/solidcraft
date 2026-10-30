@@ -2258,6 +2258,7 @@ mod tests {
             match handle(&mut app, &crate::fonts::test_context(), &req) {
                 Outcome::Done(v) => v,
                 Outcome::Screenshot { path } => json!({"ok": true, "screenshot": path}),
+                Outcome::ExportSvg { .. } => json!({"ok": false}),
             }
         };
         let designs = json!([proj.to_string_lossy()]);

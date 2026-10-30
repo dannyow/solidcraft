@@ -448,7 +448,8 @@ fn section_with_badge<R>(
     let t = Tokens::get();
     ui.add_space(t.space_2);
     let id = ui.make_persistent_id(id);
-    let mut open = !pending && (searching || ui.ctx().data_mut(|data| data.get_persisted::<bool>(id)).unwrap_or(default_open));
+    // Capture patch: every section open on a tall page.
+    let mut open = !pending && (searching || super::preferences::tall_pages() || ui.ctx().data_mut(|data| data.get_persisted::<bool>(id)).unwrap_or(default_open));
     let (rect, response) = ui.allocate_exact_size(
         vec2(dimension(ui.available_width()), if compact { t.control_height - t.space_4 } else { row_height() }),
         egui::Sense::click(),

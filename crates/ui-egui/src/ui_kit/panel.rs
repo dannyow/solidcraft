@@ -1211,7 +1211,8 @@ fn page_list_sized<S>(
     let height = if super::preferences::tall_pages() {
         let drawn = ui.ctx().data(|d| d.get_temp::<f32>(egui::Id::new("sc_tall_page_height"))).unwrap_or(t.control_height * rows);
         // Never shorter than the window opens on a usual screen, so the page list stays whole.
-        (drawn + padding.sum().y + header_band).max(t.control_height * rows + header_band).clamp(0.0, room.max(0.0))
+        // Not limited by the screen: the recorder captures a page taller than it in tiles.
+        (drawn + padding.sum().y + header_band).max(t.control_height * rows + header_band)
     } else {
         room.clamp(0.0, t.control_height * rows + header_band)
     };

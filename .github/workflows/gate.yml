@@ -1,4 +1,4 @@
-# GENERATED from upstream .github/workflows/ci.yml at 18dc05c83d2329aff6e27568db208e96dc0a5ef9.
+# GENERATED from upstream .github/workflows/ci.yml at 5d6c5bab39bcb9db872b1ab6a8d831c1ad80a438.
 # Do not edit by hand: it is regenerated. The fork's pre-PR gate: upstream's jobs on
 # GitHub's standard runners, run by hand on one branch (see the `on:` block).
 # Rewrites: name: 1; triggers: 1; concurrency group: 1; timeouts: 18; checkout refs: 17; free disk: 14; stickydisk steps dropped: 5; mesa cache via actions/cache: 2; runners (Linux): 17; runners (Windows): 1; cache save on main: 11; cache save on main, shard 1: 1; advisories on dependency changes: 1; advisories step off the nightly: 1; deps from the merge base: 1; nightly jobs: 5; nightly alert dropped: 1; nightly check in ci: 1; nightly env in ci: 1
@@ -291,15 +291,16 @@ jobs:
             windows=true
             gpu_paths=true
             # Fork gate: Dependency advisories as on a pull request (Cargo.lock or a Cargo.toml changed
-            # since the merge base with upstream main); when the compare fails, run them.
+            # since the merge base with upstream main) and Compile WebAssembly as in the merge queue (a change
+            # that reaches the wasm build); when the compare fails, run both.
             if git fetch -q --no-tags https://github.com/tangency-labs/solidcraft.git main && base=$(git merge-base FETCH_HEAD HEAD) \
               && git diff --no-renames --name-only -z "$base" HEAD > "$RUNNER_TEMP/ci-paths"; then
               deps_wasm_paths "$RUNNER_TEMP/ci-paths"
             else
               deps=true
+              wasm=true
             fi
-            wasm=false
-            echo "deps=$deps (against upstream main at ${base:-unknown})"
+            echo "deps=$deps wasm=$wasm (against upstream main at ${base:-unknown})"
           else
             # Compare both old and new paths of renames; unknown paths run native checks.
             git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/ci-paths"

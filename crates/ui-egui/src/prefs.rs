@@ -1600,10 +1600,13 @@ impl Snapshot {
             favourites,
             profile,
         } = self;
-        let mut prefs = prefs.clone();
-        keep_recorded(&app.preferences, &mut prefs);
-        prefs == app.preferences
-            && *layout == app.ui.layout
+        // Cloned only when something differs, to leave out what the app recorded meanwhile.
+        let same = *prefs == app.preferences || {
+            let mut prefs = prefs.clone();
+            keep_recorded(&app.preferences, &mut prefs);
+            prefs == app.preferences
+        };
+        same && *layout == app.ui.layout
             && *grid == app.ui.show_grid
             && *navigation_bar == app.ui.show_navigation_bar
             && *tool_cursor == app.ui.tool_cursor
@@ -1628,17 +1631,17 @@ fn apply_pending(app: &SolveApp) -> bool {
 }
 
 /// Copy into `prefs` what the app records in the preferences by itself while the dialog is open:
-/// panel sizes, folds and sides, recent lists, the last agent and models, update bookkeeping.
-/// None of it has a control in the dialog, so it is no change for Apply and Cancel keeps it as
-/// it is now. A field left off this list is a setting: compared, and put back by Cancel.
-/// `matches` clones the snapshot's `Prefs` for this, twice a frame while the dialog is open.
+/// panel sizes, folds and sides, the render library's lists, the chat's models, update
+/// bookkeeping. These are no change for Apply, and Cancel keeps them as they are now. A field
+/// belongs here only when code outside the dialog writes it while the dialog can be open and
+/// nothing in the dialog changes it other than Restore Defaults or a settings profile; any
+/// other field is a setting, compared and put back.
 fn keep_recorded(now: &Prefs, prefs: &mut Prefs) {
     macro_rules! keep {
         ($($field:ident),* $(,)?) => { $(prefs.$field.clone_from(&now.$field);)* };
     }
     keep!(
         update,
-        open_designs,
         browser_width,
         browser_share,
         browser_collapsed,
@@ -1657,7 +1660,6 @@ fn keep_recorded(now: &Prefs, prefs: &mut Prefs) {
         agent_chat_minimized,
         agent_chat_popped,
         agent_chat_window,
-        agent_last,
         agent_models,
         space_mouse_offered,
     );

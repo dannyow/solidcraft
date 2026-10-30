@@ -1503,11 +1503,11 @@ pub fn open_at(app: &mut SolveApp, page: usize) {
     app.prefs_window.section = page.min(PAGES.len() - 1);
 }
 
-/// Every setting the dialog changes, for Cancel and Restore Defaults.
+/// Every setting the dialog changes, for Cancel and Restore Defaults. Not `app.ui.dark`: it
+/// follows the theme, which is in `prefs`.
 #[derive(Clone)]
 struct Snapshot {
     prefs: Prefs,
-    dark: bool,
     layout: crate::shell::LayoutMode,
     grid: bool,
     navigation_bar: bool,
@@ -1530,7 +1530,6 @@ impl Snapshot {
     fn take(app: &SolveApp) -> Snapshot {
         Snapshot {
             prefs: app.preferences.clone(),
-            dark: app.ui.dark,
             layout: app.ui.layout,
             grid: app.ui.show_grid,
             navigation_bar: app.ui.show_navigation_bar,
@@ -1548,18 +1547,17 @@ impl Snapshot {
             profile: app.settings_profiles.active.clone(),
         }
     }
-    fn restore(self, app: &mut SolveApp) {
+    fn restore(mut self, app: &mut SolveApp) {
         let graphics = (app.preferences.msaa, app.preferences.window_system.clone(), app.preferences.graphics_adapter.clone());
         let units_changed = app.preferences.default_units != self.prefs.default_units;
-        // Update bookkeeping isn't a setting: a check that finished while the dialog was open stays.
-        let update = std::mem::take(&mut app.preferences.update);
+        keep_recorded(&app.preferences, &mut self.prefs);
         app.preferences = self.prefs;
         sync_surface_analysis(app);
-        app.preferences.update = update;
         if units_changed {
             default_units_changed(app);
         }
-        app.ui.dark = self.dark;
+        // Dark follows the theme put back (`apply` follows the desktop under System).
+        select_theme(app, &app.preferences.theme.clone());
         app.ui.layout = self.layout;
         app.ui.show_grid = self.grid;
         app.ui.show_navigation_bar = self.navigation_bar;
@@ -1586,7 +1584,6 @@ impl Snapshot {
     fn matches(&self, app: &SolveApp) -> bool {
         let Snapshot {
             prefs,
-            dark,
             layout,
             grid,
             navigation_bar,
@@ -1603,8 +1600,9 @@ impl Snapshot {
             favourites,
             profile,
         } = self;
-        *prefs == app.preferences
-            && *dark == app.ui.dark
+        let mut prefs = prefs.clone();
+        keep_recorded(&app.preferences, &mut prefs);
+        prefs == app.preferences
             && *layout == app.ui.layout
             && *grid == app.ui.show_grid
             && *navigation_bar == app.ui.show_navigation_bar
@@ -1625,13 +1623,44 @@ impl Snapshot {
 
 /// Whether Apply has anything to do (#8561): something changed since the dialog opened or since
 /// the last Apply. False while the dialog is closed.
-fn apply_pending(app: &mut SolveApp) -> bool {
-    let Some(snapshot) = app.prefs_window.snapshot.as_mut() else {
-        return false;
-    };
-    // Update bookkeeping isn't a setting and Cancel keeps it (`restore`), so it isn't a change.
-    snapshot.prefs.update.clone_from(&app.preferences.update);
+fn apply_pending(app: &SolveApp) -> bool {
     app.prefs_window.snapshot.as_ref().is_some_and(|s| !s.matches(app))
+}
+
+/// Copy into `prefs` what the app records in the preferences by itself while the dialog is open:
+/// panel sizes, folds and sides, recent lists, the last agent and models, update bookkeeping.
+/// None of it has a control in the dialog, so it is no change for Apply and Cancel keeps it as
+/// it is now. A field left off this list is a setting: compared, and put back by Cancel.
+/// `matches` clones the snapshot's `Prefs` for this, twice a frame while the dialog is open.
+fn keep_recorded(now: &Prefs, prefs: &mut Prefs) {
+    macro_rules! keep {
+        ($($field:ident),* $(,)?) => { $(prefs.$field.clone_from(&now.$field);)* };
+    }
+    keep!(
+        update,
+        open_designs,
+        browser_width,
+        browser_share,
+        browser_collapsed,
+        timeline_left_width,
+        timeline_collapsed,
+        timeline_left_browser_collapsed,
+        render_shots_strip,
+        render_inspector_side,
+        render_inspector_width,
+        render_browser_side,
+        render_browser_width,
+        render_library_favorites,
+        render_library_recent,
+        agent_chat_side,
+        agent_chat_width,
+        agent_chat_minimized,
+        agent_chat_popped,
+        agent_chat_window,
+        agent_last,
+        agent_models,
+        space_mouse_offered,
+    );
 }
 
 /// The colour theme (#2255): Dark, Light, System, the built-in theme files and the imported
@@ -6978,16 +7007,23 @@ mod tests {
         draw(&mut app, crate::test_support::pointer(apply, true));
         draw(&mut app, crate::test_support::pointer(apply, false));
         assert!(app.prefs_window.open && !app.preferences.zoom_to_cursor, "Apply keeps the dialog and the change");
+        assert!(app.prefs_window.snapshot.as_ref().is_some_and(|s| !s.prefs.zoom_to_cursor), "Apply took a new snapshot");
         assert_eq!(draw(&mut app, vec![]), Some(0.0), "after Apply: Apply is disabled");
-        // A disabled Apply does nothing when clicked.
+
+        // What the app records while the dialog is open is not a change: a panel resized beside
+        // the dialog, update bookkeeping.
+        let width = app.preferences.agent_chat_width;
+        app.preferences.agent_chat_width = width + 80.0;
+        app.preferences.update.last_check += 1.0;
+        assert_eq!(draw(&mut app, vec![]), Some(0.0), "a resized panel is not a change");
+        assert_eq!(control(&mut app, &json!({})).unwrap()["apply_enabled"], false);
+        // A disabled Apply does nothing when clicked: no new snapshot, so it keeps the old width.
         draw(&mut app, crate::test_support::pointer(apply, true));
         draw(&mut app, crate::test_support::pointer(apply, false));
         assert_eq!(draw(&mut app, vec![]), Some(0.0));
+        assert!(app.prefs_window.snapshot.as_ref().is_some_and(|s| s.prefs.agent_chat_width == width), "the disabled Apply did nothing");
 
-        // Every setting Cancel would put back counts, the shortcuts and view settings included;
-        // update bookkeeping (not a setting, and Cancel keeps it) does not.
-        app.preferences.update.last_check += 1.0;
-        assert_eq!(draw(&mut app, vec![]), Some(0.0), "update bookkeeping is not a change");
+        // Every setting Cancel would put back counts, the shortcuts and view settings included.
         app.keymap.custom.insert("solid.extrude".into(), vec!["Shift+E".into()]);
         assert_eq!(draw(&mut app, vec![]), Some(1.0), "a rebinding is a change");
         let v = control(&mut app, &json!({"button": "apply"})).unwrap();
@@ -6995,9 +7031,13 @@ mod tests {
         app.ui.show_grid = !app.ui.show_grid;
         assert_eq!(draw(&mut app, vec![]), Some(1.0), "a view setting is a change");
 
-        // Cancel puts it back and closes; opened again, there is nothing to apply.
+        // Cancel puts it back and closes, and leaves the panel as it was resized; opened again,
+        // there is nothing to apply.
+        let grid = app.ui.show_grid;
         let v = control(&mut app, &json!({"button": "cancel"})).unwrap();
         assert_eq!(v["apply_enabled"], false);
+        assert_ne!(app.ui.show_grid, grid, "the view setting is put back");
+        assert_eq!(app.preferences.agent_chat_width, width + 80.0, "the panel keeps its new width");
         let v = control(&mut app, &json!({"open": "General"})).unwrap();
         assert_eq!(v["apply_enabled"], false);
     }

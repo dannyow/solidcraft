@@ -2832,6 +2832,19 @@ fn press_pull_on_a_chamfer_face_edits_the_chamfer() {
     assert_eq!(out["edited"], "Bevel", "{out}");
     assert_eq!(s.doc.features.len(), 2, "no extrude added");
     assert!(rel(volume(&mut s), 24000.0 - cut(5.0)) < 1e-6, "{}", volume(&mut s));
+    // A point on the flat front face 0.02 mm from its edge with the chamfer (which now runs from
+    // (35, 0) to (40, 5)) is the front face's: it is extruded, the chamfer is left alone.
+    let mut t = Session::default();
+    run(&mut t, "solid.box", json!({"length": 40, "width": 30, "height": 20}));
+    run(&mut t, "solid.chamfer", json!({"edges": [[40, 0, 10]], "distance": 3, "name": "Bevel"}));
+    let out = run(&mut t, "solid.press_pull", json!({"face": [36.98, 0, 10], "distance": 1}));
+    assert!(out.get("edited").is_none(), "{out}");
+    assert!(matches!(t.doc.features.last().map(|f| &f.kind), Some(solidcraft_doc::FeatureKind::Extrude { .. })), "an extrude added: {out}");
+    assert!(
+        matches!(&t.doc.features[1].kind, solidcraft_doc::FeatureKind::Chamfer { distance, .. } if distance == "3"),
+        "{:?}",
+        t.doc.features[1].kind
+    );
     // Too far in (past zero) or too far out: an error, the chamfer as it was.
     let on = [39.0, 1.0, 10.0];
     for d in [-10.0, 1e9] {

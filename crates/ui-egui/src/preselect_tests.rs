@@ -978,6 +978,69 @@ fn chamfer_face_then_press_pull_edits_its_chamfer() {
     assert_eq!(d.editing.map(|e| e.0), Some(chamfer));
 }
 
+/// Press Pull reopens a fillet or chamfer of several edges with its arrow on the edge of the face
+/// clicked, not on the feature's first edge (the Sample Plate's far corner): picked first, or
+/// picked with Press Pull open. Opened from the history, the arrow stays on the first edge.
+#[test]
+fn press_pull_on_a_blend_face_puts_the_arrow_on_the_clicked_edge() {
+    let r = 6.0 * std::f64::consts::FRAC_1_SQRT_2;
+    let chamfered = json!([
+        {"command": "solid.box", "params": {"length": 40, "width": 30, "height": 20}},
+        {"command": "solid.chamfer", "params": {"edges": [[20, 0, 20], [40, 15, 20], [20, 30, 20], [0, 15, 20]], "distance": 2}}
+    ]);
+    // The script, the body, a point on the clicked blend face, its edge, the feature's first edge.
+    let cases = [
+        (solidcraft_engine::sample::script(), "Plate", Vec3::new(74.0 + r, 44.0 + r, 4.0), Vec3::new(80.0, 50.0, 4.0), Vec3::new(0.0, 0.0, 4.0)),
+        (chamfered, "Body1", Vec3::new(20.0, 29.0, 19.0), Vec3::new(20.0, 30.0, 20.0), Vec3::new(20.0, 0.0, 20.0)),
+    ];
+    for (script, body, p, clicked, first) in cases {
+        let setup = |h: &mut crate::scenario::Harness| -> Sel {
+            h.app.session.run_script(&script).unwrap();
+            h.frames(2);
+            h.step(&json!({"call": "ui.view", "params": {"view": "fit"}})).unwrap();
+            let names = solidcraft_engine::doc::naming::face_names_at(&h.app.session.model.state(), &[p]);
+            assert!(names[0].contains("blend"), "{names:?}");
+            let st = h.app.session.model.state();
+            let index = solidcraft_engine::doc::naming::face_names(st.body(body).unwrap()).iter().position(|n| *n == names[0]).unwrap();
+            Sel::Face { body: body.into(), index, point: p }
+        };
+        // The arrow is nearer `want` than `other` on screen.
+        let arrow_near = |h: &mut crate::scenario::Harness, want: Vec3, other: Vec3, how: &str| {
+            h.frames(5);
+            assert!(
+                matches!(h.app.dialog.as_ref().map(|d| &d.kind), Some(Kind::Fillet { .. })),
+                "{body} {how}: {:?}",
+                h.app.dialog.as_ref().map(|d| &d.kind)
+            );
+            let tip = crate::scenario::handle_at("arrow").unwrap_or_else(|| panic!("{body} {how}: no arrow"));
+            let mut dist = |w: Vec3| {
+                let [x, y] = h.at(&json!({"world": [w.x, w.y, w.z]})).unwrap();
+                tip.distance(egui::pos2(x as f32, y as f32))
+            };
+            let (a, b) = (dist(want), dist(other));
+            assert!(a < b, "{body} {how}: the arrow is {a} px from the edge it should be on, {b} px from the other");
+        };
+        let mut h = crate::scenario::Harness::new();
+        let face = setup(&mut h);
+        h.app.session.selection = vec![face];
+        h.step(&json!({"start": "solid.press_pull"})).unwrap();
+        arrow_near(&mut h, clicked, first, "picked first");
+        // No click to go by: the feature's first edge, as before.
+        let id = h.app.dialog.as_ref().and_then(|d| d.editing).map(|e| e.0).unwrap();
+        crate::dialogs::cancel(&mut h.app);
+        h.step(&json!({"call": "ui.editFeature", "params": {"feature": id}})).unwrap();
+        arrow_near(&mut h, first, clicked, "from the history");
+
+        let mut h = crate::scenario::Harness::new();
+        let face = setup(&mut h);
+        h.step(&json!({"start": "solid.press_pull"})).unwrap();
+        let index = if let Sel::Face { index, .. } = &face { *index } else { 0 };
+        let hit = crate::viewport::Hit::Face { body: body.into(), index, point: p };
+        crate::viewport::dialog_pick(&mut h.app, &hit, face);
+        arrow_near(&mut h, clicked, first, "picked with Press Pull open");
+    }
+}
+
 #[test]
 fn faces_then_shell_and_face_then_hole() {
     let mut app = boxed();

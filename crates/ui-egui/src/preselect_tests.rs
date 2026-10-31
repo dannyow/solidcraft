@@ -942,6 +942,42 @@ fn fillet_face_then_press_pull_edits_its_fillet() {
     assert_eq!(d.editing.map(|e| e.0), Some(fillet));
 }
 
+/// Press Pull on a chamfer's flat face reopens the chamfer to change its distance, as on a
+/// fillet's face, rather than extruding it (#4986): picked first, or picked with Press Pull
+/// already open.
+#[test]
+fn chamfer_face_then_press_pull_edits_its_chamfer() {
+    let script = json!([
+        {"command": "solid.box", "params": {"length": 40, "width": 30, "height": 20}},
+        {"command": "solid.chamfer", "params": {"edges": [[40, 0, 10]], "distance": 3}}
+    ]);
+    // The middle of the chamfer's face, from (37, 0) to (40, 3).
+    let p = Vec3::new(38.5, 1.5, 10.0);
+    let bevel = |app: &SolveApp| {
+        let names = solidcraft_engine::doc::naming::face_names_at(&app.session.model.state(), &[p]);
+        assert!(names[0].contains("blend"), "{names:?}");
+        let st = app.session.model.state();
+        let b = st.body("Body1").unwrap();
+        let index = solidcraft_engine::doc::naming::face_names(b).iter().position(|n| *n == names[0]).unwrap();
+        Sel::Face { body: "Body1".into(), index, point: p }
+    };
+    let mut app = app_with(script.clone());
+    let chamfer = app.session.doc.features.last().unwrap().id;
+    let sel = bevel(&app);
+    let d = start(&mut app, vec![sel], "solid.press_pull");
+    assert!(matches!(&d.kind, Kind::Fillet { radius, chamfer: true, .. } if radius.starts_with('3')), "{:?}", d.kind);
+    assert_eq!(d.editing.map(|e| e.0), Some(chamfer));
+
+    let mut app = app_with(script);
+    app.start("solid.press_pull");
+    let sel = bevel(&app);
+    let index = if let Sel::Face { index, .. } = &sel { *index } else { 0 };
+    crate::viewport::dialog_pick(&mut app, &crate::viewport::Hit::Face { body: "Body1".into(), index, point: p }, sel);
+    let d = app.dialog.clone().unwrap();
+    assert!(matches!(d.kind, Kind::Fillet { chamfer: true, .. }), "{:?}", d.kind);
+    assert_eq!(d.editing.map(|e| e.0), Some(chamfer));
+}
+
 #[test]
 fn faces_then_shell_and_face_then_hole() {
     let mut app = boxed();

@@ -18,7 +18,10 @@
 //!   - `{"caption": "…"}`: the caption of the frames from here on (`null`: none); the driver
 //!     draws it under the picture
 //!   - `{"glide": AT, "frames"?: 30}`: move the pointer there, eased, one event per frame
-//!   - `{"press": AT?}`, `{"drag_to": AT, "frames"?: 30}`, `{"release": true}`: an eased drag
+//!   - `{"press": AT?}`, `{"drag_to": AT, "frames"?: 30}`, `{"release": true}`: an eased drag;
+//!     each takes `alt`, `shift`, `ctrl`, `cmd` (as the harness's `move`). The press's modifiers
+//!     are held for the whole drag; a `drag_to` or `release` that names any of them changes them
+//!     from there on (`"alt": false` lets Alt go). The release lets them all go
 //!   - `{"still": n}`: n frames with nothing happening; `{"pause": ms}`: the same in milliseconds
 //!
 //! With the agent pointer, while text is typed the drawn pointer steps aside (right of where it
@@ -239,6 +242,19 @@ struct Recorder {
     aside: bool,
     /// The driver draws the pointer (the agent pointer is not painted, so nothing steps aside).
     system: bool,
+    /// Modifiers held through the drag, from its `press` (or a later `drag_to`) to the release.
+    mods: egui::Modifiers,
+}
+
+/// The modifiers a recorder step names, as the harness's `move` step reads them (`ctrl` is the
+/// primary modifier, Command on macOS), or `None` when the step names none.
+fn step_mods(s: &Value) -> Option<egui::Modifiers> {
+    let names = ["alt", "shift", "ctrl", "cmd"];
+    if !names.iter().any(|k| s.get(*k).is_some()) {
+        return None;
+    }
+    let b = |k: &str| s.get(k).and_then(Value::as_bool).unwrap_or(false);
+    Some(egui::Modifiers { shift: b("shift"), alt: b("alt"), ctrl: b("ctrl"), command: b("ctrl") || b("cmd"), mac_cmd: b("cmd") })
 }
 
 impl Recorder {
@@ -304,7 +320,7 @@ impl Recorder {
         let mut h = h;
         // A frame so the renderer has the fonts before anything is recorded.
         h.frames(2);
-        Ok(Recorder { h, tape, pointer: egui::pos2(size.x / 2.0, size.y / 2.0), aside: false, system })
+        Ok(Recorder { h, tape, pointer: egui::pos2(size.x / 2.0, size.y / 2.0), aside: false, system, mods: egui::Modifiers::NONE })
     }
 
     /// Eased pointer events from where the pointer is to `to`, one per frame (button held or not).
@@ -352,7 +368,8 @@ impl Recorder {
 
     fn button(&mut self, pressed: bool) {
         let pos = self.pointer;
-        self.h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        let modifiers = self.mods;
+        self.h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers });
         self.h.settle();
     }
 
@@ -390,12 +407,28 @@ impl Recorder {
                 let to = self.point(at)?;
                 self.glide(to, frames(GLIDE));
             }
+            // The glide there is made with no modifiers; the press brings them and they stay down.
+            self.mods = step_mods(s).unwrap_or(egui::Modifiers::NONE);
             self.button(true);
         } else if let Some(at) = s.get("drag_to") {
             let to = self.point(at)?;
+            if let Some(m) = step_mods(s) {
+                self.mods = m;
+                self.h.app.synthetic.push(egui::Event::ModifiersChanged(m));
+            }
             self.glide(to, frames(GLIDE));
         } else if s.get("release").is_some() {
+            if let Some(m) = step_mods(s) {
+                self.mods = m;
+            }
+            let held = self.mods != egui::Modifiers::NONE;
             self.button(false);
+            self.mods = egui::Modifiers::NONE;
+            if held {
+                // egui keeps the release's modifiers until the next event: let them go now.
+                self.h.app.synthetic.push(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+                self.h.settle();
+            }
         } else if let Some(n) = s.get("still").and_then(Value::as_u64) {
             self.h.frames(n.min(600) as usize);
         } else if let Some(ms) = s.get("pause").and_then(Value::as_f64) {

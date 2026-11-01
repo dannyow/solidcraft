@@ -28,6 +28,7 @@
 mod boss;
 mod hole;
 mod look;
+mod primitive;
 mod rest;
 mod snap_fit;
 
@@ -217,6 +218,7 @@ pub(crate) struct Turn {
 static TOOLS: &[&Spec] = &[
     &boss::SPEC,
     &hole::SPEC,
+    &primitive::SPEC,
     &rest::SPEC,
     &snap_fit::SPEC,
 ];

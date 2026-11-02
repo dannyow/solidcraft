@@ -1541,7 +1541,8 @@ fn sketch_px_per_mm(plane: &Plane, proj: &Proj) -> Option<f32> {
 
 fn glyphs(app: &SolveApp, painter: &egui::Painter, proj: &Proj, hover: Option<Pos2>) {
     let Some(sid) = active_sketch(app) else { return };
-    let st = app.session.world_state();
+    // While a dimension's value is typed, the glyphs sit where that value puts their geometry.
+    let st = crate::dim_view::preview_world(app).unwrap_or_else(|| app.session.world_state());
     let Some(ss) = st.sketch(sid) else { return };
     if ss.sketch.view.hide_constraints {
         GLYPHS.with(|g| g.borrow_mut().clear());

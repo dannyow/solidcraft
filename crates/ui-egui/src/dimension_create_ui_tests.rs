@@ -475,8 +475,14 @@ fn draft_annotation_does_not_move_committed_dimension_hitboxes() {
     place(&mut h, &[[0., 0.], [0., 10.]], [-5., 5.]);
     type_value(&mut h, "12 mm");
     h.settle();
-    assert_eq!(crate::dim_view::text_at(&width), Some(at));
-    assert_eq!(crate::dim_view::drawn(), drawn, "draft annotations must not become committed hit targets");
+    // The sketch is drawn at the typed height, so the width on the top side is drawn, and
+    // picked, 2 mm higher; the draft itself is no hit target.
+    let [_, top] = h.at(&json!({"world":[10,12,0]})).unwrap();
+    let [_, was] = h.at(&json!({"world":[10,10,0]})).unwrap();
+    let moved = crate::dim_view::text_at(&width).unwrap() - at;
+    assert!(moved.x.abs() < 0.5 && (f64::from(moved.y) - (top - was)).abs() < 0.5, "the width follows its side: {moved:?}");
+    let ids = |d: Vec<(String, egui::Pos2)>| d.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+    assert_eq!(ids(crate::dim_view::drawn()), ids(drawn.clone()), "draft annotations must not become committed hit targets");
     assert_eq!(h.app.session.doc.to_json(), baseline);
     h.step(&json!({"key":"Escape"})).unwrap();
     assert_eq!(crate::dim_view::drawn(), drawn);
@@ -820,6 +826,90 @@ fn type_first_escape_cancels_with_no_change() {
         assert_eq!(h.app.tool.as_ref().map(|t| (t.cmd, t.picks.len())), Some(("sketch.dimension", 0)), "Esc drops the picks too");
     }
     crate::dim_view::cancel();
+}
+
+/// The open sketch's lines as drawn this frame (the sketch scene's on-top lines): their
+/// bounds, [min x, min y, max x, max y].
+fn drawn_extent(h: &Harness) -> [f32; 4] {
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let scene = crate::viewport::build_sketch_scene(&h.app, &crate::viewport::projection(&h.app, rect));
+    let ends = scene.overlay.as_chunks::<32>().0.iter().flat_map(|l| [&l[0..12], &l[12..24]]);
+    ends.map(|b| [0, 4].map(|i| b.get(i..i + 4).and_then(|x| x.try_into().ok()).map(f32::from_le_bytes)))
+        .filter_map(|[x, y]| Some([x?, y?]))
+        .fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |m, [x, y]| [m[0].min(x), m[1].min(y), m[2].max(x), m[3].max(y)])
+}
+
+fn near(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.6)
+}
+
+fn bounds(sk: &solidcraft_engine::sketch::Sketch) -> [f32; 4] {
+    let (lo, hi) = sk.bounds().unwrap_or_default();
+    [lo.x, lo.y, hi.x, hi.y].map(|v| v as f32)
+}
+
+/// While a value is typed the sketch is drawn as the value leaves it, not only the dimension
+/// (#44 in the notes), whatever the shape; Esc draws it as it is again.
+#[test]
+fn typing_a_value_draws_the_sketch_at_that_value_and_escape_restores_it() {
+    let fix = |entity: &str| ("sketch.constraint.fix", json!({"entity": entity}));
+    let rectangle = vec![("sketch.rectangle.two_point", json!({"p0":[0,0],"p1":[40,20]}))];
+    let circle = vec![("sketch.circle.center", json!({"center":[10,0],"radius":5})), fix("c1.center")];
+    let slot = vec![("sketch.slot.center_to_center", json!({"p0":[-20,0],"p1":[20,0],"width":20}))];
+    let arc = vec![("sketch.arc.center_point", json!({"center":[10,0],"start":[18,0],"sweep":90})), fix("a1.center")];
+    let spline = vec![
+        ("sketch.spline.fit_point", json!({"points": [[-30, 0], [-10, 18], [10, 6], [30, 20]]})),
+        ("sketch.line", json!({"points":[[30,20],[30,-10]],"infer":true})),
+    ];
+    let mixed = vec![
+        ("sketch.circle.center", json!({"center":[0,0],"radius":10})),
+        ("sketch.circle.center", json!({"center":[40,0],"radius":10})),
+        ("sketch.line", json!({"points":[[0,10],[40,10]],"infer":false})),
+        ("sketch.constraint.tangent", json!({"a":"l1","b":"c1"})),
+        ("sketch.constraint.tangent", json!({"a":"l1","b":"c2"})),
+        ("sketch.constraint.equal", json!({"a":"c1","b":"c2"})),
+        fix("c1.center"),
+        fix("c2.center"),
+    ];
+    let half = std::f64::consts::FRAC_1_SQRT_2 * 8.0;
+    let cases: [(&str, &[(&str, serde_json::Value)], [f64; 2], Vec<[f64; 2]>, &str); 6] = [
+        ("rectangle side", &rectangle, [20., 10.], vec![[20., 0.]], "60"),
+        ("circle diameter", &circle, [10., 0.], vec![[15., 0.]], "20"),
+        ("slot side", &slot, [0., 0.], vec![[0., 10.]], "60"),
+        ("arc radius", &arc, [10., 0.], vec![[10. + half, half]], "12"),
+        ("spline end", &spline, [0., 5.], vec![[30., 5.]], "50"),
+        ("tangent equal circles", &mixed, [20., 0.], vec![[-10., 0.]], "30"),
+    ];
+    for (name, setup, centre, picks, typed) in cases {
+        let mut h = sketch_with(setup, centre);
+        // Far enough out that the grown shapes stay in view (the drawn lines stop at its edge).
+        h.app.cam.distance = 200.0;
+        h.settle();
+        let real = bounds(&solved(&h));
+        let before = drawn_extent(&h);
+        assert!(near(before, real), "{name}: drawn {before:?}, sketch {real:?}");
+        for p in &picks {
+            h.step(&json!({"click":{"world":[p[0],p[1],0]}})).unwrap();
+        }
+        assert_live(&h);
+        keys(&mut h, typed);
+        let (_, _, preview) = crate::dim_view::draft_preview().expect("the draft is open");
+        let target = bounds(&preview);
+        assert!(!near(target, real), "{name}: the typed value changes the sketch: {target:?}");
+        let shown = drawn_extent(&h);
+        assert!(near(shown, target), "{name}: the sketch follows the typed value: drawn {shown:?}, solved {target:?}");
+        assert!(near(bounds(&solved(&h)), real), "{name}: nothing changes until Enter");
+        // A value that does not solve (here half typed) keeps the last one that did.
+        keys(&mut h, "*");
+        assert_eq!(crate::dim_view::draft_preview().map(|(expr, _, _)| expr), Some(format!("{typed}*")));
+        let kept = drawn_extent(&h);
+        assert!(near(kept, target), "{name}: an unsolved value keeps the last drawn: {kept:?}");
+        h.step(&json!({"key":"Escape"})).unwrap();
+        assert!(!crate::dim_view::editing());
+        let after = drawn_extent(&h);
+        assert!(near(after, real), "{name}: Esc draws the sketch as it is: {after:?}");
+        crate::dim_view::cancel();
+    }
 }
 
 /// Place first still works: a click before typing puts the text there and keeps the value

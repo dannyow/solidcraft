@@ -746,6 +746,72 @@ fn sketch_scene_cost_while_the_camera_moves() {
     }
 }
 
+/// Times typing a dimension's value on a large open sketch (an imported drawing): each
+/// keystroke's whole headless frame (the scratch solve included), the sketch scene drawn from
+/// the typed value's solve (sampled past the display cache), and the same scene from the
+/// design's own solve with its sampled curves cached, as it is drawn when nothing is typed.
+/// Run with `--ignored --nocapture`.
+#[test]
+#[ignore = "manual dimension preview measurement"]
+fn dimension_preview_cost_per_keystroke() {
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0));
+    for k in [10, 20, 32] {
+        crate::dim_view::cancel();
+        let mut h = Harness::new();
+        h.app.run("sketch.create", json!({"plane": "XY"})).unwrap();
+        h.app.run("sketch.insert_svg", json!({"text": blob_logo(k)})).unwrap();
+        // A line to dimension: the first length dimension scales the whole drawing with it.
+        h.app.run("sketch.line", json!({"points": [[-20, -20], [-10, -20]], "infer": false})).unwrap();
+        h.app.fit_view();
+        h.frames(3);
+        let st = h.app.session.world_state();
+        let sid = h.app.session.active_sketch.expect("the sketch is open");
+        let (curves, constraints, line) = st.sketch(sid).map_or((0, 0, None), |ss| {
+            let line = ss.sketch.curves.iter().find(|c| matches!(c.kind, solidcraft_engine::sketch::CurveKind::Line { .. })).map(|c| c.id.clone());
+            (ss.sketch.curves.len(), ss.sketch.constraints.len(), line)
+        });
+        drop(st);
+        let Some(line) = line else { panic!("k={k}: no line to dimension") };
+        let proj = crate::viewport::projection(&h.app, rect);
+        let median = |mut t: Vec<f64>| {
+            t.sort_by(f64::total_cmp);
+            t[t.len() / 2]
+        };
+        let (mut idle_frame, mut cached) = (Vec::new(), Vec::new());
+        for _ in 0..10 {
+            idle_frame.push(ms(|| h.frame()));
+            cached.push(ms(|| drop(crate::viewport::build_sketch_scene(&h.app, &proj))));
+        }
+        assert!(crate::dim_view::begin_live(&mut h.app, vec![line], None).unwrap(), "the line takes a typed value");
+        h.frames(3);
+        let (mut key_frame, mut previewed) = (Vec::new(), Vec::new());
+        for (i, ch) in "1234567890".chars().enumerate() {
+            if i % 3 == 0 {
+                // Back to a short value now and then, so every keystroke solves a new size.
+                h.app.synthetic.push(egui::Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                });
+            }
+            h.app.synthetic.push(egui::Event::Text(ch.to_string()));
+            key_frame.push(ms(|| h.frame()));
+            assert!(crate::dim_view::preview_world(&h.app).is_some(), "k={k}: the draft previews");
+            previewed.push(ms(|| drop(crate::viewport::build_sketch_scene(&h.app, &proj))));
+        }
+        println!(
+            "DIMPREVIEW k={k} curves={curves} constraints={constraints} idle_frame_ms={:.2} keystroke_frame_ms={:.2} scene_cached_ms={:.2} scene_previewed_ms={:.2}",
+            median(idle_frame),
+            median(key_frame),
+            median(cached),
+            median(previewed)
+        );
+        crate::dim_view::cancel();
+    }
+}
+
 /// Orbiting a large design with the right button, as a person turns the view: per frame, the
 /// window thread's frame (the model scene built, as the app builds it once a renderer is there),
 /// its named steps, and the renderer's prepare, draw recording and GPU work on an offscreen device

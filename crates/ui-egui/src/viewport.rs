@@ -623,6 +623,8 @@ fn sketch_scene_key(app: &SolveApp, proj: &Proj) -> u64 {
     // Conflicting curves in their own colour, or as before (#7244).
     app.preferences.sketch_conflict_colour.hash(&mut h);
     (std::sync::Arc::as_ptr(&crate::open_meshing::shown_world(app)) as usize).hash(&mut h);
+    // The open sketch follows a dimension's typed value.
+    crate::dim_view::preview_world(app).map(|w| std::sync::Arc::as_ptr(&w) as usize).hash(&mut h);
     crate::sketch_display::projection_key(proj, app.viewport.pixels_per_point()).hash(&mut h);
     h.finish()
 }
@@ -1769,15 +1771,26 @@ pub(crate) fn build_sketch_scene(app: &SolveApp, proj: &Proj) -> GpuScene {
             }
         }
     }
+    // While a dimension's value is typed, the open sketch as that value leaves it. Sampled past
+    // the display cache, which holds the design's own solve for picking.
+    let typed = crate::dim_view::preview_world(app);
+    let ppp = app.viewport.pixels_per_point();
+    let mut typed_budget = solidcraft_engine::render::SamplingBudget::new(131_072, 1_048_576);
     for sid in visible_sketches(app) {
-        let Some(ss) = st.sketch(sid) else { continue };
         let active = s.active_sketch == Some(sid);
+        let typed = typed.as_ref().filter(|_| active);
+        let Some(ss) = typed.unwrap_or(&st).sketch(sid) else { continue };
         // Closed profiles are shaded (lifted off a face they may lie on).
         let lift = ss.plane.normal() * 0.01;
         let profiles = if app.session.visibility.hidden_profiles.contains(&sid) || ss.sketch.view.hide_profile { &[][..] } else { &ss.profiles[..] };
         let profile_fill = sc.color(c4(tk.profile_fill));
-        for (index, _) in profiles.iter().enumerate() {
-            let display = crate::sketch_display::profile_region(app, sid, index, &ss.plane, proj);
+        for (index, profile) in profiles.iter().enumerate() {
+            let display = match typed {
+                Some(_) => {
+                    std::sync::Arc::new(crate::sketch_display::display_region_with_budget(&profile.region, &ss.plane, proj, ppp, &mut typed_budget))
+                }
+                None => crate::sketch_display::profile_region(app, sid, index, &ss.plane, proj),
+            };
             for tri in display.as_ref().as_ref().map_or_else(Vec::new, |region| crate::sketch_display::fill_triangles(region, &mut fill_budget)) {
                 for q in tri {
                     sc.trans_tri((ss.plane.to_world(q) + lift).to_f32(), [0.0; 3], profile_fill);
@@ -1796,7 +1809,10 @@ pub(crate) fn build_sketch_scene(app: &SolveApp, proj: &Proj) -> GpuScene {
         let conflict = if active { Conflict::of(app, &ss.sketch, &ss.report) } else { Conflict::default() };
         let mut owners = Vec::new();
         let lines = sketch_lines_with_sampler(&ss.sketch, &ss.plane, active, &ss.report.curve_determined, |_, index, plane| {
-            let parts = crate::sketch_display::curve_sample(app, sid, index, plane, proj).parts.clone();
+            let parts = match typed {
+                Some(_) => crate::sketch_display::curve_with_budget(&ss.sketch, index, plane, proj, ppp, &mut typed_budget).parts,
+                None => crate::sketch_display::curve_sample(app, sid, index, plane, proj).parts.clone(),
+            };
             owners.extend(std::iter::repeat_n(index, parts.len()));
             parts
         });
@@ -6422,6 +6438,8 @@ fn overlays(app: &SolveApp, painter: &egui::Painter, proj: &Proj) {
         }
     }
     let Some(sid) = app.session.active_sketch else { return };
+    // While a dimension's value is typed, its points where that value puts them.
+    let st = crate::dim_view::preview_world(app).unwrap_or(st);
     let Some(ss) = st.sketch(sid) else { return };
     let sk = &ss.sketch;
     let locked = sk.locked_points();

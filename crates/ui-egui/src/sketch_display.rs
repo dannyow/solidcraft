@@ -98,7 +98,7 @@ pub fn display_region(region: &Region2, plane: &Plane, proj: &Proj, ppp: f32) ->
     display_region_with_budget(region, plane, proj, ppp, &mut budget)
 }
 
-fn display_region_with_budget(region: &Region2, plane: &Plane, proj: &Proj, ppp: f32, shared: &mut SamplingBudget) -> Option<Region2> {
+pub(crate) fn display_region_with_budget(region: &Region2, plane: &Plane, proj: &Proj, ppp: f32, shared: &mut SamplingBudget) -> Option<Region2> {
     let mut budget = SamplingBudget::new(shared.remaining_vertices.min(4096), shared.remaining_nodes.min(65_536));
     let initial = budget.clone();
     let result = (|| {

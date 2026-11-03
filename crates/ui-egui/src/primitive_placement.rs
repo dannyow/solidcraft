@@ -101,12 +101,14 @@ pub(crate) fn rows(ui: &mut egui::Ui, s: &Session, cmd: &str, extra: &mut Map<St
     enter
 }
 
-/// A coordinate of a picked point as a field shows it, in millimetres.
-fn mm(v: f64) -> String {
+/// A coordinate of a picked point (mm) as a field shows it and OK sends it: in the design's
+/// length unit, kept to the micrometre in every unit, so a vertex at 38.1 mm reads "1.5 in", not
+/// "1.5000000000000002 in", and one in a metre design does not move by a rounded millimetre.
+fn coord(s: &Session, v: f64) -> String {
     let v = (v * 1e6).round() / 1e6;
     // No "-0 mm".
     let v = if v == 0.0 { 0.0 } else { v };
-    format!("{v} mm")
+    s.doc.design_length(v).1
 }
 
 /// Where a pick is in the world: a vertex, or a point on an edge or face, where it was picked; a
@@ -132,15 +134,16 @@ pub(crate) fn picked(s: &Session, cmd: &str, at: &mut Option<(Vec3, Option<Vec3>
         return;
     }
     let Some((index, _)) = current(s, cmd, extra) else { return };
-    store(cmd, extra, index, &[mm(point.x), mm(point.y), mm(point.z)]);
+    store(cmd, extra, index, &[coord(s, point.x), coord(s, point.y), coord(s, point.z)]);
     *at = None;
 }
 
 /// A Box dropped by its placement marker at `p` on a face with normal `n`: the current placement
 /// (the corner or the centre) written so the box stands on the face, centred on `p` across it
 /// (only centred on `p` on a face square to no axis), as a pre-selected face places it. `size` is
-/// the box's length, width and height (mm). Returns the point written.
-pub(crate) fn dropped(extra: &mut Map<String, Value>, p: Vec3, n: Vec3, size: Vec3) -> Option<Value> {
+/// the box's length, width and height (mm). Returns the point written, in the design's length
+/// unit as the fields show it.
+pub(crate) fn dropped(s: &Session, extra: &mut Map<String, Value>, p: Vec3, n: Vec3, size: Vec3) -> Option<Value> {
     if !p.is_finite() {
         return None;
     }
@@ -156,7 +159,7 @@ pub(crate) fn dropped(extra: &mut Map<String, Value>, p: Vec3, n: Vec3, size: Ve
     let at = if index == 0 { corner } else { corner + size * 0.5 };
     // A drop is only as exact as the pointer: to the micrometre, so the fields read 45 mm, not
     // 44.999991 mm.
-    let um = |v: f64| mm((v * 1e3).round() / 1e3);
+    let um = |v: f64| coord(s, (v * 1e3).round() / 1e3);
     let coords = [um(at.x), um(at.y), um(at.z)];
     store("solid.box", extra, index, &coords);
     Some(json!(coords))

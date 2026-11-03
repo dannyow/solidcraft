@@ -586,6 +586,61 @@ fn tool_sheet_dropdowns_and_preferences_still_open_above_the_sheet() {
 }
 
 #[test]
+fn preferences_stays_above_a_feature_dialog_that_is_clicked_or_dragged() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    h.call("ui.resize", json!({"width":1400,"height":900}));
+    h.app.start("solid.extrude");
+    h.settle();
+    h.call("ui.prefs", json!({"open":"General"}));
+    let preferences = rect_of("dialog:window").unwrap();
+    // The dialog's title just left of Preferences, so half the dialog lies under it.
+    let title = crate::scenario::handle_at("dialog:title").unwrap();
+    let to = egui::pos2(preferences.left() - 20.0, preferences.top() + 60.0);
+    h.call("ui.drag", json!({"x0":title.x,"y0":title.y,"x1":to.x,"y1":to.y,"steps":10}));
+    let sheet = h.app.viewport.dialog_rect.unwrap();
+    let overlap = sheet.intersect(preferences);
+    assert!(overlap.is_positive(), "the dialog overlaps Preferences");
+    let prefs = egui::Id::new("sc_prefs");
+    assert_eq!(h.ctx.layer_id_at(overlap.center()).unwrap().id, prefs, "dragging the dialog must not cover Preferences");
+    let exposed = egui::pos2(sheet.left() + 10.0, overlap.center().y);
+    assert!(!preferences.contains(exposed));
+    h.call("ui.click", json!({"x":exposed.x,"y":exposed.y}));
+    assert_eq!(h.ctx.layer_id_at(overlap.center()).unwrap().id, prefs, "clicking the dialog must not cover Preferences");
+    h.step(&json!({"click":{"handle":"prefs:cancel"}})).unwrap();
+    assert!(!h.app.prefs_window.open && h.app.dialog.is_some(), "the feature dialog stays open under Preferences");
+    h.step(&json!({"widget":"Cancel"})).unwrap();
+    assert!(h.app.dialog.is_none(), "the feature dialog stays usable");
+}
+
+#[test]
+fn of_two_open_windows_the_one_clicked_comes_to_the_top() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    h.call("ui.resize", json!({"width":1400,"height":900}));
+    h.call("ui.prefs", json!({"open":"General"}));
+    h.app.messages.open = true;
+    h.settle();
+    let (prefs, messages) = (egui::Id::new("sc_prefs"), egui::Id::new("sc_messages"));
+    let rect = |h: &Harness, id| h.ctx.memory(|m| m.area_rect(id)).unwrap();
+    // Messages opens inside Preferences; drag it by its edge so it sticks out on the right.
+    let edge = egui::pos2(rect(&h, messages).right() - 4.0, rect(&h, messages).center().y);
+    let to = egui::pos2(rect(&h, prefs).right() + rect(&h, messages).width() / 2.0, edge.y);
+    h.call("ui.drag", json!({"x0":edge.x,"y0":edge.y,"x1":to.x,"y1":to.y,"steps":10}));
+    let (p, m) = (rect(&h, prefs), rect(&h, messages));
+    let overlap = p.intersect(m);
+    assert!(overlap.is_positive() && m.right() > p.right(), "Messages overlaps the right edge of Preferences: {p:?} {m:?}");
+    assert_eq!(h.ctx.layer_id_at(overlap.center()).unwrap().id, messages, "the window opened last is on top");
+    let only_prefs = egui::pos2(p.left() + 12.0, p.center().y);
+    let only_messages = egui::pos2(m.right() - 12.0, m.center().y);
+    for (id, at) in [(prefs, only_prefs), (messages, only_messages)] {
+        h.call("ui.click", json!({"x":at.x,"y":at.y}));
+        h.settle();
+        assert_eq!(h.ctx.layer_id_at(overlap.center()).unwrap().id, id, "clicking a window raises it over the other window");
+    }
+}
+
+#[test]
 fn compact_layout_is_saved_and_survives_cancel_apply_defaults_and_bad_input() {
     let mut h = Harness::new();
     h.app.run("solid.box", json!({"length":10,"width":10,"height":10})).unwrap();

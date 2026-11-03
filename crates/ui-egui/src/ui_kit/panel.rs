@@ -1263,6 +1263,7 @@ impl<'a> Window<'a> {
             (None, Some((pivot, pos))) => window.pivot(pivot).default_pos(pos),
             (None, None) => window.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center() - vec2(0.0, row_height() * 2.5)),
         };
+        super::container::keep_window_on_top(ctx, self.id);
         let shown = window.show(ctx, |ui| {
             let result = add(ui);
             super::Container::finish_content(ui, frame);

@@ -133,6 +133,24 @@ pub(crate) fn is_canvas(layer: egui::LayerId) -> bool {
     CANVAS_AREAS.with(|areas| areas.borrow().contains(&layer.id))
 }
 
+thread_local! {
+    /// The non-modal [`Surface::Window`] hosts shown so far: Preferences, Messages and the like.
+    static WINDOWS: std::cell::RefCell<std::collections::HashSet<Id>> = std::cell::RefCell::default();
+}
+
+/// A non-modal window stays above feature dialogs and workspace cards while it is open. It asks
+/// for the top of `Order::Middle` every frame, and egui keeps the order among all layers that ask,
+/// so a dialog clicked or dragged under it stays under it. The frame a press lands on another
+/// window it does not ask, so of two windows the one clicked last still comes to the top.
+pub(super) fn keep_window_on_top(ctx: &Context, id: Id) {
+    WINDOWS.with(|windows| windows.borrow_mut().insert(id));
+    let pressed = ctx.pointer_interact_pos().filter(|_| ctx.input(|i| i.pointer.any_pressed())).and_then(|pos| ctx.layer_id_at(pos));
+    if pressed.is_some_and(|layer| layer.id != id && WINDOWS.with(|windows| windows.borrow().contains(&layer.id))) {
+        return;
+    }
+    ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, id));
+}
+
 /// Universal outer host and surface policy. Both host geometry and frame construction must go
 /// through this API, including code in nested modules and platform apps.
 #[derive(Clone, Copy)]

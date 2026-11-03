@@ -96,12 +96,10 @@ pub(crate) fn rows(ui: &mut egui::Ui, s: &Session, cmd: &str, extra: &mut Map<St
     enter
 }
 
-/// A coordinate of a picked point (mm) as a field shows it, in the design's length unit.
+/// A coordinate of a picked point (mm) as a field shows it: in the design's length unit, to a
+/// millionth of it, so a vertex at 38.1 mm reads "1.5 in", not "1.5000000000000002 in".
 fn coord(s: &Session, v: f64) -> String {
-    let v = (v * 1e6).round() / 1e6;
-    // No "-0 mm".
-    let v = if v == 0.0 { 0.0 } else { v };
-    crate::length_input::model(&s.doc, v)
+    crate::length_input::shown(&s.doc, v)
 }
 
 /// A point picked into the Box's input: it goes into the X, Y and Z of the current placement

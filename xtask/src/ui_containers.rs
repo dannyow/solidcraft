@@ -106,14 +106,14 @@ impl ContainerGuard {
                 }
             }
             // Only from the path's first segment: `egui::Response::on_hover_ui` is one path, not
-            // three. A `::` before the ident continues a path; a single `:` (a struct field) does not.
-            let continues_a_path = index >= 2
+            // three. `ident ::` before the ident continues a path; a single `:` (a struct field)
+            // and a leading `::` do not. `<egui::Response>::on_hover_text` is the qualified form:
+            // the `>` that closes the type stands before the `::`.
+            let colons = index >= 2
                 && matches!(&tokens[index - 2..index], [proc_macro2::TokenTree::Punct(a), proc_macro2::TokenTree::Punct(b)] if a.as_char() == ':' && b.as_char() == ':');
-            // `<egui::Response>::on_hover_text`: the type sits in a group before `::`.
-            let qualified = names.len() == 1
-                && continues_a_path
-                && index >= 3
-                && matches!(&tokens[index - 3], proc_macro2::TokenTree::Punct(p) if p.as_char() == '>');
+            let before = if colons && index >= 3 { tokens.get(index - 3) } else { None };
+            let continues_a_path = matches!(before, Some(proc_macro2::TokenTree::Ident(_)));
+            let qualified = names.len() == 1 && matches!(before, Some(proc_macro2::TokenTree::Punct(p)) if p.as_char() == '>');
             if (!continues_a_path || qualified) && Self::tooltip_path(&names, qualified) {
                 self.found.push(format!("raw tooltip in macro: {}{}", if qualified { "<_>::" } else { "" }, names.join("::")));
             }
@@ -488,6 +488,7 @@ mod tests {
         use egui::Response as R;
         macro_rules! tip { ($r:expr) => { $r.on_hover_text(text); egui::Response::on_hover_ui($r, body) }; }
         macro_rules! field { () => { Hooks { tip: egui::Response::on_hover_text, show: <egui::Response>::show_tooltip_text } }; }
+        macro_rules! lead { ($r:expr) => { ::egui::Response::on_hover_ui_at_pointer($r, body) }; }
     "#,
         );
         assert_eq!(
@@ -505,6 +506,7 @@ mod tests {
                 "raw tooltip in macro: <_>::show_tooltip_text",
                 "raw tooltip in macro: egui::Response::on_hover_text",
                 "raw tooltip in macro: egui::Response::on_hover_ui",
+                "raw tooltip in macro: egui::Response::on_hover_ui_at_pointer",
                 "raw tooltip path <_>::on_hover_text",
                 "raw tooltip path R::on_hover_text",
                 "raw tooltip path Response::on_hover_ui",

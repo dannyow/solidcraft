@@ -101,7 +101,16 @@ pub(crate) fn rows(ui: &mut egui::Ui, s: &Session, cmd: &str, extra: &mut Map<St
     enter
 }
 
-/// A coordinate of a picked point (mm) as a field shows it and OK sends it: in the design's
+/// A picked point's coordinate (mm), to the nanometre: a pick writes millimetres in any design,
+/// as it did before the marker.
+fn mm(v: f64) -> String {
+    let v = (v * 1e6).round() / 1e6;
+    // No "-0 mm".
+    let v = if v == 0.0 { 0.0 } else { v };
+    format!("{v} mm")
+}
+
+/// A coordinate of a dropped point (mm) as a field shows it and OK sends it: in the design's
 /// length unit, kept to the micrometre in every unit, so a vertex at 38.1 mm reads "1.5 in", not
 /// "1.5000000000000002 in", and one in a metre design does not move by a rounded millimetre.
 fn coord(s: &Session, v: f64) -> String {
@@ -134,7 +143,7 @@ pub(crate) fn picked(s: &Session, cmd: &str, at: &mut Option<(Vec3, Option<Vec3>
         return;
     }
     let Some((index, _)) = current(s, cmd, extra) else { return };
-    store(cmd, extra, index, &[coord(s, point.x), coord(s, point.y), coord(s, point.z)]);
+    store(cmd, extra, index, &[mm(point.x), mm(point.y), mm(point.z)]);
     *at = None;
 }
 

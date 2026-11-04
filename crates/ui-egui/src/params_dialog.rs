@@ -52,6 +52,8 @@ pub struct ParamsDialog {
     pub new_comment: String,
     /// The last error from an action in the dialog.
     pub error: Option<String>,
+    /// The add row's draft when adding it was refused: `error` stays only while the draft does.
+    new_refused: Option<NewRefused>,
     /// The expression edit to preview: (name, expression).
     pub preview: Option<(String, String)>,
     /// The rows as the engine listed them at one revision of the design (#2723): listing
@@ -207,6 +209,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         publish(app, ctx);
     }
     let Some(mut d) = app.params.take() else { return };
+    forget_refused_add(&mut d);
     d.sort = ctx.data_mut(|m| m.get_persisted(sort_id())).unwrap_or_default();
     let sort = d.sort;
     ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
@@ -708,6 +711,39 @@ fn apply_live_checkbox(app: &mut SolveApp, ui: &mut egui::Ui, d: &mut ParamsDial
     }
 }
 
+/// The add row's draft (name, unit, expression, comment) an add was refused with, and the
+/// message. The message is about that draft, as a dialog's refused OK is about its inputs
+/// (#641): once the draft changes, the message goes and the expression cell's own live check
+/// says what is wrong now, if anything.
+#[derive(Clone, Debug, PartialEq)]
+struct NewRefused {
+    draft: (String, usize, String, String),
+    error: String,
+}
+
+fn new_draft(d: &ParamsDialog) -> (String, usize, String, String) {
+    (d.new_name.clone(), d.new_unit, d.new_expr.clone(), d.new_comment.clone())
+}
+
+/// Show why the add was refused, for as long as the draft stays as it is.
+fn refuse_add(d: &mut ParamsDialog, error: String) {
+    d.new_refused = Some(NewRefused { draft: new_draft(d), error: error.clone() });
+    d.error = Some(error);
+}
+
+/// A refused add's message gives way once its draft changes; a message another action put
+/// in its place stays, and only the snapshot goes.
+fn forget_refused_add(d: &mut ParamsDialog) {
+    if let Some(was) = &d.new_refused {
+        if d.error.as_deref() != Some(was.error.as_str()) {
+            d.new_refused = None;
+        } else if new_draft(d) != was.draft {
+            d.error = None;
+            d.new_refused = None;
+        }
+    }
+}
+
 /// The add row, one cell per column of the user table it ends.
 fn add_row(app: &mut SolveApp, ui: &mut egui::Ui, table: &mut ui_kit::Table<'_>, d: &mut ParamsDialog, right: f32) {
     let name_id = ui.make_persistent_id("pnew_name");
@@ -804,7 +840,7 @@ fn add_row(app: &mut SolveApp, ui: &mut egui::Ui, table: &mut ui_kit::Table<'_>,
             return;
         }
         if let Err(error) = live {
-            d.error = Some(error);
+            refuse_add(d, error);
             if let Some(id) = focused_id {
                 ui.memory_mut(|m| m.request_focus(id));
             }
@@ -817,11 +853,12 @@ fn add_row(app: &mut SolveApp, ui: &mut egui::Ui, table: &mut ui_kit::Table<'_>,
                 d.new_comment.clear();
                 d.new_expr.clear();
                 d.error = None;
+                d.new_refused = None;
                 d.adding = true;
                 d.focus_new = submit;
             }
             Err(error) => {
-                d.error = Some(error);
+                refuse_add(d, error);
                 // Enter stays in the field that was submitted. A click into another cell
                 // has to keep that cell, or an invalid name cannot be corrected (#3965).
                 if submit && let Some(id) = focused_id {
@@ -1431,6 +1468,49 @@ mod tests {
         h.step(&json!({"click": {"handle": "dialog:Filter"}})).unwrap();
         assert_eq!(h.app.session.doc.param("width").unwrap().unit, "cm");
         assert!(h.app.params.as_ref().unwrap().error.is_none());
+    }
+
+    /// A refused add's message is about the draft it ran with: correcting the draft takes the
+    /// message away before any second Enter, for a refused `parameters.add` and for the
+    /// expression's own live check alike.
+    #[test]
+    fn correcting_a_refused_new_parameter_clears_its_error() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.run("parameters.add", json!({"name": "width", "expression": "10 mm"})).unwrap();
+        h.step(&json!({"start": "parameters.change"})).unwrap();
+        h.step(&json!({"click": {"handle": "dialog:table:user:add"}})).unwrap();
+        h.step(&json!({"text": "width"})).unwrap();
+        h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
+        h.step(&json!({"text": "25 mm"})).unwrap();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        let error = h.app.params.as_ref().unwrap().error.clone();
+        assert!(error.as_deref().is_some_and(|e| e.contains("already a parameter")), "a taken name is refused: {error:?}");
+        h.step(&json!({"click": {"handle": "param:new:name"}})).unwrap();
+        h.step(&json!({"text": "2"})).unwrap();
+        h.frames(2);
+        let d = h.app.params.as_ref().unwrap();
+        assert_eq!(d.new_name, "width2");
+        assert_eq!(d.error, None, "the message was about the name `width`, which is gone");
+        // The expression's live check: Enter on an unfinished expression shows it in the banner,
+        // and correcting the expression takes it away.
+        h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
+        h.step(&json!({"key": "A", "cmd": true})).unwrap();
+        h.step(&json!({"text": "10 +"})).unwrap();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        let error = h.app.params.as_ref().unwrap().error.clone();
+        assert!(error.is_some(), "an unfinished expression is refused: {error:?}");
+        assert!(h.app.session.doc.param("width2").is_none());
+        h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
+        h.step(&json!({"key": "A", "cmd": true})).unwrap();
+        h.step(&json!({"text": "10 + 5"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.params.as_ref().unwrap().error, None, "the message was about `10 +`, which is gone");
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.session.doc.param("width2").unwrap().expr, "10 + 5");
     }
 
     /// #8563: sorting orders each section, and each model group, by itself.

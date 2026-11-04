@@ -73,12 +73,12 @@ fn parameter_enter_invalid_preserves_draft_and_other_rows() {
     let d = h.app.params.as_ref().unwrap();
     assert_eq!(d.new_name, "bad");
     assert_eq!(d.new_expr, "missing + 1 mm");
-    assert!(d.error.is_some());
+    assert!(d.banner().is_some());
     fill(&mut h, "name", "existing");
     fill(&mut h, "expression", "15 mm");
     enter(&mut h, false);
     assert_eq!(h.app.session.doc.to_json(), saved);
-    assert!(h.app.params.as_ref().unwrap().error.is_some());
+    assert!(h.app.params.as_ref().unwrap().banner().is_some());
 }
 #[test]
 fn parameter_enter_edits_expression_without_adding_draft() {

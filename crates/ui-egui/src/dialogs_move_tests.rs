@@ -144,35 +144,44 @@ fn editing_a_move_puts_the_triad_on_the_placed_body() {
     assert!(got.is_some_and(|c| c.dist(expected) < 1e-6), "the triad sits at the placed body before the edited move, {expected:?}, got {got:?}");
 }
 
-/// A model that cannot be placed (the viewport says why) still moves its bodies: the dialog
-/// reads them unplaced, as it did before it read the placed model.
+/// A model that cannot be placed (the viewport says why) still moves its bodies. Editing a move
+/// in it: the triad and the bodies' centre come from the unplaced model before the move, as they
+/// did before the dialog read the placed model, and an edge pivot stays at its picked point, as
+/// the placed model is empty.
 #[test]
 fn a_model_that_cannot_be_placed_keeps_the_move_usable() {
     let mut h = crate::scenario::Harness::new();
     h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
     h.app.run("sketch.create", json!({"plane": "XY", "name": "Outline"})).unwrap();
-    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("solid.cylinder", json!({"base": [0, 0, 0], "axis": [0, 0, 1], "radius": 10, "height": 20})).unwrap();
     h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
     // A placement that folds y onto x: its sketch plane has no second axis, so placing fails.
     let mut doc = (*h.app.session.doc).clone();
     doc.occurrences[0].transform[1] = [1.0, 0.0, 0.0, 0.0];
     h.app.session.doc = std::sync::Arc::new(doc);
     assert!(h.app.session.world_state().is_err(), "the premise: this model cannot be placed");
-    h.app.start("solid.move");
-    {
-        let d = h.app.dialog.as_mut().unwrap();
-        d.kind = kind(FREE, &h.app.session.doc);
-        d.inputs = inputs(FREE);
-        d.inputs[0].items = vec![Sel::Body { name: "Body1".into() }];
-        if let Kind::Move { rx, .. } = &mut d.kind {
-            *rx = "30 deg".into();
-        }
+    let unplaced = h.app.session.model.state_before(moved);
+    let bounds = unplaced.body("Body1").unwrap().mesh().bounds();
+    let centre = (bounds.min + bounds.max) * 0.5;
+    let mut d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
+    let got = pivot(&h.app, &d);
+    assert!(got.is_some_and(|c| c.dist(centre) < 1e-6), "the triad's pivot is the unplaced body's centre before the move, {centre:?}, got {got:?}");
+    assert!(triad(&h.app, &d).is_some(), "the triad shows");
+    if let Kind::Move { rx, .. } = &mut d.kind {
+        *rx = "30 deg".into();
     }
-    let d = h.app.dialog.as_ref().unwrap();
-    let p = params(&h.app, d);
+    let p = params(&h.app, &d);
     assert!(p.is_ok(), "a turn about the bodies' centre is still made: {p:?}");
-    let got = triad(&h.app, d).map(|t| t.center);
-    assert!(got.is_some_and(|c| c.dist(Vec3::new(20.0, 15.0, 10.0)) < 1e-6), "the triad sits at the unplaced body, got {got:?}");
+    // A round edge of the cylinder, picked somewhere: with no placed body to find its circle on,
+    // the pivot is the picked point.
+    let edges = unplaced.body("Body1").unwrap().mesh().edges.len();
+    let round = (0..edges).find(|i| crate::dialogs::edge_circle_in(&unplaced, "Body1", *i).is_some());
+    assert!(round.is_some(), "the premise: the cylinder has a round edge");
+    let picked = Vec3::new(1.0, 2.0, 3.0);
+    d.inputs[1].items = vec![Sel::Edge { body: "Body1".into(), index: round.unwrap(), point: picked }];
+    let pivot = sel_point(&h.app, &d, d.inputs[1].items.first());
+    assert!(pivot.is_some_and(|p| p.dist(picked) < 1e-9), "an edge pivot stays at its picked point, got {pivot:?}");
 }
 
 /// #6822: Rotate must offer a draggable handle after the body and axis are picked.

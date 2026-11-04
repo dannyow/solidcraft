@@ -47,6 +47,20 @@ impl ContainerGuard {
         names.iter().any(|n| n == "Frame" || self.frames.contains(n)) && names.last().is_some_and(|n| matches!(n.as_str(), "new" | "default"))
     }
 
+    fn raw_tooltip(name: &str) -> bool {
+        matches!(
+            name,
+            "on_hover_text"
+                | "on_hover_ui"
+                | "on_hover_text_at_pointer"
+                | "on_hover_ui_at_pointer"
+                | "on_disabled_hover_text"
+                | "on_disabled_hover_ui"
+                | "show_tooltip_text"
+                | "show_tooltip_ui"
+        )
+    }
+
     fn constructor(name: &str) -> bool {
         matches!(name, "new" | "default" | "default_area" | "left" | "right" | "top" | "bottom" | "menu" | "context_menu" | "popup" | "window")
     }
@@ -259,6 +273,11 @@ impl<'ast> Visit<'ast> for ContainerGuard {
         if call.method == "shadow" {
             self.found.push("caller-defined outer shadow".into());
         }
+        // Tooltips are backing surfaces too (blur, theme): every caller goes through the kit's
+        // `BackingTooltipExt` (`backing_on_hover_text` and friends), never egui's own methods.
+        if Self::raw_tooltip(&call.method.to_string()) {
+            self.found.push(format!("raw tooltip .{}", call.method));
+        }
         visit::visit_expr_method_call(self, call);
     }
 }
@@ -338,7 +357,7 @@ pub fn run(root: &Path) -> Result<(), String> {
     }
     failures.sort();
     if !failures.is_empty() {
-        return Err(format!("Use ui_kit::Container for outer hosts:\n{}", failures.join("\n")));
+        return Err(format!("Use ui_kit::Container for outer hosts and ui_kit::BackingTooltipExt for tooltips:\n{}", failures.join("\n")));
     }
     println!("ui-containers: all outer hosts use the shared API");
     Ok(())
@@ -417,6 +436,45 @@ mod tests {
             container_violations(
                 r#"
         fn show(ui: &mut Ui) { egui::Frame::NONE.inner_margin(8).show(ui, |ui| {}); }
+    "#
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn tooltips_go_through_the_backing_extension() {
+        let bad = container_violations(
+            r#"
+        fn show(ui: &mut Ui, response: egui::Response) {
+            response.on_hover_text(tip);
+            ui.label(name).on_hover_ui(|ui| {});
+            button.on_disabled_hover_text(why).on_hover_text_at_pointer(tip);
+            response.show_tooltip_text(tip);
+        }
+    "#,
+        );
+        assert_eq!(
+            bad,
+            [
+                "raw tooltip .on_disabled_hover_text",
+                "raw tooltip .on_hover_text",
+                "raw tooltip .on_hover_text_at_pointer",
+                "raw tooltip .on_hover_ui",
+                "raw tooltip .show_tooltip_text"
+            ]
+        );
+        assert!(
+            container_violations(
+                r#"
+        use crate::ui_kit::BackingTooltipExt as _;
+        fn show(ui: &mut Ui, response: egui::Response) {
+            response.backing_on_hover_text(tip).backing_on_disabled_hover_text(why);
+            ui.label(name).backing_on_hover_ui(|ui| {});
+            response.backing_show_tooltip_text(tip);
+            response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        }
+        #[cfg(test)] mod tests { fn fixture(response: egui::Response) { response.on_hover_text(tip); } }
     "#
             )
             .is_empty()

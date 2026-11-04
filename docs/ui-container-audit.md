@@ -75,7 +75,10 @@ qualified default constructors, struct literals, macro-hidden hosts and popup sh
 Host APIs are default-denied except for explicit popup-state operations, so new egui
 constructors are rejected automatically. Private raw host/module imports are rejected too,
 preventing aliases from escaping into another source file.
-It also rejects raw outer popup/window frames and custom outer shadows. Invalid Rust
+It also rejects raw outer popup/window frames and custom outer shadows, and egui's own
+tooltip methods (`on_hover_text`, `on_hover_ui`, their at-pointer and disabled forms,
+`show_tooltip_text`, `show_tooltip_ui`): tooltips are backing surfaces and go through
+`ui_kit::BackingTooltipExt`. Invalid Rust
 fails closed. Read-only state queries, content-only frames, and test-only fixtures remain
 valid; there are no per-feature allowances. This enforces the construction boundary;
 surface purpose and hand-painted content still need ordinary review.

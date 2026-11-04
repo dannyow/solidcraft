@@ -553,6 +553,11 @@ mod tests {
         let d = h.app.design_properties.as_ref().expect("still open");
         assert!(d.error.as_deref().is_some_and(|e| e.contains("control character")), "{:?}", d.error);
         assert_eq!(h.app.session.undo.len(), undo + 1);
+        // Correcting the field takes the refusal away before OK is clicked again.
+        h.app.design_properties.as_mut().unwrap().fields[1] = "PN-1".into();
+        h.frames(2);
+        let d = h.app.design_properties.as_ref().expect("still open");
+        assert_eq!(d.error, None, "the message was about the control character, which is gone");
     }
 
     #[test]

@@ -52,7 +52,7 @@ pub struct ParamsDialog {
     pub new_comment: String,
     /// The last error from an action in the dialog.
     pub error: Option<String>,
-    /// The add row's draft when adding it was refused: `error` stays only while the draft does.
+    /// Why adding the add row's draft was refused, kept while the draft and the design stay.
     new_refused: Option<NewRefused>,
     /// The expression edit to preview: (name, expression).
     pub preview: Option<(String, String)>,
@@ -88,6 +88,12 @@ impl ParamsDialog {
     /// almost never the one wanted, and had to be erased first.
     pub fn new() -> Self {
         ParamsDialog { reset_scroll: true, ..Default::default() }
+    }
+
+    /// What the window's banner says: the last action's message, else why the add row's draft
+    /// was refused.
+    pub fn banner(&self) -> Option<&str> {
+        self.error.as_deref().or(self.new_refused.as_ref().map(|r| r.error.as_str()))
     }
     /// The command the live preview should run (a valid expression being edited).
     pub fn preview_commands(&self) -> Option<Vec<(String, Value)>> {
@@ -209,7 +215,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         publish(app, ctx);
     }
     let Some(mut d) = app.params.take() else { return };
-    forget_refused_add(&mut d);
+    forget_refused_add(app, &mut d);
     d.sort = ctx.data_mut(|m| m.get_persisted(sort_id())).unwrap_or_default();
     let sort = d.sort;
     ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
@@ -288,7 +294,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         }
                     }
                 });
-                if let Some(error) = &d.error {
+                if let Some(error) = d.banner() {
                     ui_kit::text(ui, error, ui_kit::Text::Error("parameters_error"));
                 }
                 let filter = d.filter.to_ascii_lowercase();
@@ -711,13 +717,16 @@ fn apply_live_checkbox(app: &mut SolveApp, ui: &mut egui::Ui, d: &mut ParamsDial
     }
 }
 
-/// The add row's draft (name, unit, expression, comment) an add was refused with, and the
-/// message. The message is about that draft, as a dialog's refused OK is about its inputs
-/// (#641): once the draft changes, the message goes and the expression cell's own live check
-/// says what is wrong now, if anything.
+/// The add row's draft (name, unit, expression, comment) an add was refused with, the design's
+/// revision at the time, and the message. The message is about that draft in that design, as a
+/// dialog's refused OK is about its inputs and the design (#641): once either changes, the
+/// message goes and the expression cell's own live check says what is wrong now, if anything.
+/// The row edits' messages live in `ParamsDialog::error`, apart from this one, so neither can
+/// be taken for the other.
 #[derive(Clone, Debug, PartialEq)]
 struct NewRefused {
     draft: (String, usize, String, String),
+    revision: u64,
     error: String,
 }
 
@@ -725,22 +734,19 @@ fn new_draft(d: &ParamsDialog) -> (String, usize, String, String) {
     (d.new_name.clone(), d.new_unit, d.new_expr.clone(), d.new_comment.clone())
 }
 
-/// Show why the add was refused, for as long as the draft stays as it is.
-fn refuse_add(d: &mut ParamsDialog, error: String) {
-    d.new_refused = Some(NewRefused { draft: new_draft(d), error: error.clone() });
-    d.error = Some(error);
+/// Show why the add was refused, for as long as the draft and the design stay as they are. It
+/// takes the banner from an earlier action's message, as every action's result does.
+fn refuse_add(app: &SolveApp, d: &mut ParamsDialog, error: String) {
+    d.new_refused = Some(NewRefused { draft: new_draft(d), revision: app.session.revision, error });
+    d.error = None;
 }
 
-/// A refused add's message gives way once its draft changes; a message another action put
-/// in its place stays, and only the snapshot goes.
-fn forget_refused_add(d: &mut ParamsDialog) {
-    if let Some(was) = &d.new_refused {
-        if d.error.as_deref() != Some(was.error.as_str()) {
-            d.new_refused = None;
-        } else if new_draft(d) != was.draft {
-            d.error = None;
-            d.new_refused = None;
-        }
+/// A refused add's message gives way once its draft or the design changes.
+fn forget_refused_add(app: &SolveApp, d: &mut ParamsDialog) {
+    if let Some(was) = &d.new_refused
+        && (was.revision != app.session.revision || new_draft(d) != was.draft)
+    {
+        d.new_refused = None;
     }
 }
 
@@ -803,6 +809,7 @@ fn add_row(app: &mut SolveApp, ui: &mut egui::Ui, table: &mut ui_kit::Table<'_>,
         row.cell(|ui| {
             let response = ui_kit::bin_button(ui, "Delete");
             row_ids.push(response.id);
+            crate::scenario::publish_handle("param:new:delete", response.rect.center());
             left |= response.lost_focus();
             discard = response.clicked();
         });
@@ -840,7 +847,7 @@ fn add_row(app: &mut SolveApp, ui: &mut egui::Ui, table: &mut ui_kit::Table<'_>,
             return;
         }
         if let Err(error) = live {
-            refuse_add(d, error);
+            refuse_add(app, d, error);
             if let Some(id) = focused_id {
                 ui.memory_mut(|m| m.request_focus(id));
             }
@@ -853,12 +860,11 @@ fn add_row(app: &mut SolveApp, ui: &mut egui::Ui, table: &mut ui_kit::Table<'_>,
                 d.new_comment.clear();
                 d.new_expr.clear();
                 d.error = None;
-                d.new_refused = None;
                 d.adding = true;
                 d.focus_new = submit;
             }
             Err(error) => {
-                refuse_add(d, error);
+                refuse_add(app, d, error);
                 // Enter stays in the field that was submitted. A click into another cell
                 // has to keep that cell, or an invalid name cannot be corrected (#3965).
                 if submit && let Some(id) = focused_id {
@@ -1485,14 +1491,14 @@ mod tests {
         h.step(&json!({"text": "25 mm"})).unwrap();
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
-        let error = h.app.params.as_ref().unwrap().error.clone();
+        let error = h.app.params.as_ref().unwrap().banner().map(str::to_owned);
         assert!(error.as_deref().is_some_and(|e| e.contains("already a parameter")), "a taken name is refused: {error:?}");
         h.step(&json!({"click": {"handle": "param:new:name"}})).unwrap();
         h.step(&json!({"text": "2"})).unwrap();
         h.frames(2);
         let d = h.app.params.as_ref().unwrap();
         assert_eq!(d.new_name, "width2");
-        assert_eq!(d.error, None, "the message was about the name `width`, which is gone");
+        assert_eq!(d.banner(), None, "the message was about the name `width`, which is gone");
         // The expression's live check: Enter on an unfinished expression shows it in the banner,
         // and correcting the expression takes it away.
         h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
@@ -1500,17 +1506,104 @@ mod tests {
         h.step(&json!({"text": "10 +"})).unwrap();
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
-        let error = h.app.params.as_ref().unwrap().error.clone();
+        let error = h.app.params.as_ref().unwrap().banner().map(str::to_owned);
         assert!(error.is_some(), "an unfinished expression is refused: {error:?}");
         assert!(h.app.session.doc.param("width2").is_none());
         h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
         h.step(&json!({"key": "A", "cmd": true})).unwrap();
         h.step(&json!({"text": "10 + 5"})).unwrap();
         h.frames(2);
-        assert_eq!(h.app.params.as_ref().unwrap().error, None, "the message was about `10 +`, which is gone");
+        assert_eq!(h.app.params.as_ref().unwrap().banner(), None, "the message was about `10 +`, which is gone");
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
         assert_eq!(h.app.session.doc.param("width2").unwrap().expr, "10 + 5");
+    }
+
+    /// The dialog with `width` and `depth` saved, and the add row holding the draft `width`,
+    /// `25 mm`, not yet submitted.
+    fn taken_name_draft() -> crate::scenario::Harness {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.run("parameters.add", json!({"name": "width", "expression": "10 mm"})).unwrap();
+        h.app.run("parameters.add", json!({"name": "depth", "expression": "5 mm"})).unwrap();
+        h.step(&json!({"start": "parameters.change"})).unwrap();
+        h.step(&json!({"click": {"handle": "dialog:table:user:add"}})).unwrap();
+        h.step(&json!({"text": "width"})).unwrap();
+        h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
+        h.step(&json!({"text": "25 mm"})).unwrap();
+        h
+    }
+
+    fn banner(h: &crate::scenario::Harness) -> Option<String> {
+        h.app.params.as_ref().unwrap().banner().map(str::to_owned)
+    }
+
+    #[test]
+    fn discarding_a_refused_new_parameter_takes_its_message_away() {
+        let mut h = taken_name_draft();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert!(banner(&h).is_some_and(|e| e.contains("already a parameter")), "{:?}", banner(&h));
+        h.step(&json!({"click": {"handle": "param:new:delete"}})).unwrap();
+        h.frames(2);
+        let d = h.app.params.as_ref().unwrap();
+        assert!(!d.adding && d.new_name.is_empty(), "the row is gone");
+        assert_eq!(d.banner(), None, "and its message with it");
+    }
+
+    #[test]
+    fn a_new_parameter_refused_on_leaving_the_row_clears_its_message_when_corrected() {
+        let mut h = taken_name_draft();
+        h.step(&json!({"click": {"handle": "dialog:Filter"}})).unwrap();
+        h.frames(2);
+        assert!(banner(&h).is_some_and(|e| e.contains("already a parameter")), "{:?}", banner(&h));
+        assert_eq!(h.app.session.doc.param("width").unwrap().expr, "10 mm", "nothing was added or changed");
+        h.step(&json!({"click": {"handle": "param:new:name"}})).unwrap();
+        h.step(&json!({"text": "2"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.params.as_ref().unwrap().new_name, "width2");
+        assert_eq!(banner(&h), None, "the message was about the name `width`, which is gone");
+    }
+
+    /// A design change can make a refused draft fine (here `width` is removed by a command, as an
+    /// agent or Undo would): the message goes with the design it was about, and Enter adds.
+    #[test]
+    fn a_refused_new_parameter_is_checked_again_when_the_design_changes() {
+        let mut h = taken_name_draft();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert!(banner(&h).is_some_and(|e| e.contains("already a parameter")), "{:?}", banner(&h));
+        h.app.run("parameters.delete", json!({"name": "width"})).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h), None, "the message was about a design that had `width`");
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.session.doc.param("width").unwrap().expr, "25 mm");
+    }
+
+    /// A row's own refusal with the very same words (renaming `depth` to the taken `width`) is
+    /// not the add row's: correcting the draft leaves it where it is.
+    #[test]
+    fn correcting_a_refused_new_parameter_keeps_a_rows_message() {
+        let mut h = taken_name_draft();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert!(banner(&h).is_some_and(|e| e.contains("already a parameter")), "{:?}", banner(&h));
+        h.run(&json!([{"click": {"handle": "param:name:depth"}, "double": true}, {"key": "A", "cmd": true}, {"text": "width"}])).unwrap();
+        // The rename commits when its box loses the focus, here to the add row's name box.
+        h.step(&json!({"click": {"handle": "param:new:name"}})).unwrap();
+        h.frames(2);
+        let d = h.app.params.as_ref().unwrap();
+        assert!(d.error.as_deref().is_some_and(|e| e.contains("already a parameter `width`")), "the rename is refused: {:?}", d.error);
+        assert!(d.new_refused.is_some(), "the draft is still refused too");
+        assert_eq!(h.app.session.doc.param("depth").unwrap().expr, "5 mm");
+        h.step(&json!({"text": "2"})).unwrap();
+        h.frames(2);
+        let d = h.app.params.as_ref().unwrap();
+        assert_eq!(d.new_name, "width2");
+        assert!(d.new_refused.is_none(), "the draft's own refusal is gone");
+        assert!(d.error.as_deref().is_some_and(|e| e.contains("already a parameter `width`")), "the rename's message stays: {:?}", d.error);
+        assert!(d.banner().is_some());
     }
 
     /// #8563: sorting orders each section, and each model group, by itself.

@@ -95,6 +95,9 @@ fn move_triad_and_ring_sit_on_the_placed_body() {
     h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
     h.app.run("occurrence.copy", json!({"component": "Part", "translate": [0, 40, 0]})).unwrap();
     h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    // An axis away from the origin and along no world axis: the ring's x, y and z all follow the centre.
+    let (o, a) = (Vec3::new(5.0, 7.0, 9.0), Vec3::new(1.0, 1.0, 1.0).normalized().unwrap());
+    h.app.run("construct.axis.two_points", json!({"a": {"point": [5, 7, 9]}, "b": {"point": [6, 8, 10]}, "name": "TurnAxis"})).unwrap();
     let world = crate::open_meshing::session_world(&h.app.session);
     let mut names: Vec<String> = world.bodies.iter().map(|b| b.name.clone()).collect();
     names.sort();
@@ -116,15 +119,60 @@ fn move_triad_and_ring_sit_on_the_placed_body() {
             d.kind = kind(ROTATE, &h.app.session.doc);
             d.inputs = inputs(ROTATE);
             d.inputs[0].items = vec![Sel::Body { name: name.clone() }];
-            d.inputs[1].items = vec![Sel::Axis { name: "Z".into() }];
+            d.inputs[1].items = vec![Sel::Axis { name: "TurnAxis".into() }];
         }
         let ring = rotation_axis(&h.app, h.app.dialog.as_ref().unwrap()).map(|(o, _)| o);
-        assert!(
-            ring.is_some_and(|o| (o.z - centre.z).abs() < 1e-6),
-            "{name}: the ring is level with the placed body at z {}, got {ring:?}",
-            centre.z
-        );
+        let foot = o + a * (centre - o).dot(a);
+        assert!(ring.is_some_and(|r| r.dist(foot) < 1e-6), "{name}: the ring is level with the placed body, at {foot:?} on the axis, got {ring:?}");
     }
+}
+
+/// Editing a move of a body in a placed component: the triad sits where the body is, placed,
+/// before that move (plus the move's own distances), not where the component was modelled.
+#[test]
+fn editing_a_move_puts_the_triad_on_the_placed_body() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let before = crate::open_meshing::session_world(&h.app.session).body("Body1").unwrap().mesh().bounds();
+    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
+    let d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
+    let expected = (before.min + before.max) * 0.5 + Vec3::new(0.0, -4.0, 0.0);
+    let got = triad(&h.app, &d).map(|t| t.center);
+    assert!(got.is_some_and(|c| c.dist(expected) < 1e-6), "the triad sits at the placed body before the edited move, {expected:?}, got {got:?}");
+}
+
+/// A model that cannot be placed (the viewport says why) still moves its bodies: the dialog
+/// reads them unplaced, as it did before it read the placed model.
+#[test]
+fn a_model_that_cannot_be_placed_keeps_the_move_usable() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("sketch.create", json!({"plane": "XY", "name": "Outline"})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    // A placement that folds y onto x: its sketch plane has no second axis, so placing fails.
+    let mut doc = (*h.app.session.doc).clone();
+    doc.occurrences[0].transform[1] = [1.0, 0.0, 0.0, 0.0];
+    h.app.session.doc = std::sync::Arc::new(doc);
+    assert!(h.app.session.world_state().is_err(), "the premise: this model cannot be placed");
+    h.app.start("solid.move");
+    {
+        let d = h.app.dialog.as_mut().unwrap();
+        d.kind = kind(FREE, &h.app.session.doc);
+        d.inputs = inputs(FREE);
+        d.inputs[0].items = vec![Sel::Body { name: "Body1".into() }];
+        if let Kind::Move { rx, .. } = &mut d.kind {
+            *rx = "30 deg".into();
+        }
+    }
+    let d = h.app.dialog.as_ref().unwrap();
+    let p = params(&h.app, d);
+    assert!(p.is_ok(), "a turn about the bodies' centre is still made: {p:?}");
+    let got = triad(&h.app, d).map(|t| t.center);
+    assert!(got.is_some_and(|c| c.dist(Vec3::new(20.0, 15.0, 10.0)) < 1e-6), "the triad sits at the unplaced body, got {got:?}");
 }
 
 /// #6822: Rotate must offer a draggable handle after the body and axis are picked.

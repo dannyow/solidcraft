@@ -65,8 +65,8 @@ impl ContainerGuard {
     /// `egui::Response::on_hover_text(response, text)`, or the same through an imported or
     /// aliased type: the tooltip method called as a path. Any path ending in one of the names
     /// counts, so an alias cannot hide it.
-    fn tooltip_path(names: &[String]) -> bool {
-        names.len() >= 2 && names.last().is_some_and(|n| Self::raw_tooltip(n))
+    fn tooltip_path(names: &[String], qualified: bool) -> bool {
+        (qualified || names.len() >= 2) && names.last().is_some_and(|n| Self::raw_tooltip(n))
     }
 
     fn constructor(name: &str) -> bool {
@@ -105,11 +105,17 @@ impl ContainerGuard {
                     self.found.push(format!("raw tooltip in macro: .{ident}"));
                 }
             }
-            // Only from the path's first segment: `egui::Response::on_hover_ui` is one path, not three.
-            let continues_a_path =
-                tokens.get(index.wrapping_sub(1)).is_some_and(|t| matches!(t, proc_macro2::TokenTree::Punct(p) if p.as_char() == ':'));
-            if !continues_a_path && Self::tooltip_path(&names) {
-                self.found.push(format!("raw tooltip in macro: {}", names.join("::")));
+            // Only from the path's first segment: `egui::Response::on_hover_ui` is one path, not
+            // three. A `::` before the ident continues a path; a single `:` (a struct field) does not.
+            let continues_a_path = index >= 2
+                && matches!(&tokens[index - 2..index], [proc_macro2::TokenTree::Punct(a), proc_macro2::TokenTree::Punct(b)] if a.as_char() == ':' && b.as_char() == ':');
+            // `<egui::Response>::on_hover_text`: the type sits in a group before `::`.
+            let qualified = names.len() == 1
+                && continues_a_path
+                && index >= 3
+                && matches!(&tokens[index - 3], proc_macro2::TokenTree::Punct(p) if p.as_char() == '>');
+            if (!continues_a_path || qualified) && Self::tooltip_path(&names, qualified) {
+                self.found.push(format!("raw tooltip in macro: {}{}", if qualified { "<_>::" } else { "" }, names.join("::")));
             }
         }
     }
@@ -236,8 +242,8 @@ impl<'ast> Visit<'ast> for ContainerGuard {
         if names.iter().any(|n| matches!(n.as_str(), "shell_card" | "dock_frame")) {
             self.found.push(names.join("::"));
         }
-        if Self::tooltip_path(&names) {
-            self.found.push(format!("raw tooltip path {}", names.join("::")));
+        if Self::tooltip_path(&names, path.qself.is_some()) {
+            self.found.push(format!("raw tooltip path {}{}", if path.qself.is_some() { "<_>::" } else { "" }, names.join("::")));
         }
         visit::visit_expr_path(self, path);
     }
@@ -476,10 +482,12 @@ mod tests {
             egui::Response::on_hover_text(response, tip);
             R::on_hover_text(response, tip);
             let show = Response::on_hover_ui;
+            <egui::Response>::on_hover_text(response, tip);
         }
         use egui::Response;
         use egui::Response as R;
         macro_rules! tip { ($r:expr) => { $r.on_hover_text(text); egui::Response::on_hover_ui($r, body) }; }
+        macro_rules! field { () => { Hooks { tip: egui::Response::on_hover_text, show: <egui::Response>::show_tooltip_text } }; }
     "#,
         );
         assert_eq!(
@@ -494,7 +502,10 @@ mod tests {
                 "raw tooltip .show_tooltip_text",
                 "raw tooltip .show_tooltip_ui",
                 "raw tooltip in macro: .on_hover_text",
+                "raw tooltip in macro: <_>::show_tooltip_text",
+                "raw tooltip in macro: egui::Response::on_hover_text",
                 "raw tooltip in macro: egui::Response::on_hover_ui",
+                "raw tooltip path <_>::on_hover_text",
                 "raw tooltip path R::on_hover_text",
                 "raw tooltip path Response::on_hover_ui",
                 "raw tooltip path egui::Response::on_hover_text",

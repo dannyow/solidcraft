@@ -81,7 +81,8 @@ disabled forms, `show_tooltip_text`, `show_tooltip_ui`), as method calls, path c
 inside macros: tooltips are backing surfaces and go through `ui_kit::BackingTooltipExt`.
 Custom tooltips the kit builds with `egui::Tooltip` through `Container::show_tooltip`, and
 the tooltips egui draws inside its own widgets (an elided label), are not covered by the
-gate. Invalid Rust fails closed. Read-only state queries, content-only frames, and test-only fixtures remain
+gate. Invalid Rust fails closed.
+Read-only state queries, content-only frames, and test-only fixtures remain
 valid; there are no per-feature allowances. This enforces the construction boundary;
 surface purpose and hand-painted content still need ordinary review.
 

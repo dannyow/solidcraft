@@ -85,6 +85,48 @@ fn editing_a_move_in_a_turned_component_keeps_world_distances() {
     assert!((bounds(&h).min - before.min - Vec3::new(0.0, -8.0, 0.0)).len() < 1e-6, "edited distances follow world axes too");
 }
 
+/// A body of a placed component: the triad and Rotate's ring sit where its placement puts the
+/// body, and a second placement's body (named after its occurrence) has a triad at all.
+#[test]
+fn move_triad_and_ring_sit_on_the_placed_body() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
+    h.app.run("occurrence.copy", json!({"component": "Part", "translate": [0, 40, 0]})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let world = crate::open_meshing::session_world(&h.app.session);
+    let mut names: Vec<String> = world.bodies.iter().map(|b| b.name.clone()).collect();
+    names.sort();
+    assert!(names.len() == 2 && names[0] == "Body1" && names[1].starts_with("Body1 ("), "{names:?}");
+    h.app.start("solid.move");
+    for name in &names {
+        let placed = world.body(name).unwrap().mesh().bounds();
+        let centre = (placed.min + placed.max) * 0.5;
+        {
+            let d = h.app.dialog.as_mut().unwrap();
+            d.kind = kind(TRANSLATE, &h.app.session.doc);
+            d.inputs = inputs(TRANSLATE);
+            d.inputs[0].items = vec![Sel::Body { name: name.clone() }];
+        }
+        let got = triad(&h.app, h.app.dialog.as_ref().unwrap()).map(|t| t.center);
+        assert!(got.is_some_and(|c| c.dist(centre) < 1e-6), "{name}: the triad sits at the placed body {centre:?}, got {got:?}");
+        {
+            let d = h.app.dialog.as_mut().unwrap();
+            d.kind = kind(ROTATE, &h.app.session.doc);
+            d.inputs = inputs(ROTATE);
+            d.inputs[0].items = vec![Sel::Body { name: name.clone() }];
+            d.inputs[1].items = vec![Sel::Axis { name: "Z".into() }];
+        }
+        let ring = rotation_axis(&h.app, h.app.dialog.as_ref().unwrap()).map(|(o, _)| o);
+        assert!(
+            ring.is_some_and(|o| (o.z - centre.z).abs() < 1e-6),
+            "{name}: the ring is level with the placed body at z {}, got {ring:?}",
+            centre.z
+        );
+    }
+}
+
 /// #6822: Rotate must offer a draggable handle after the body and axis are picked.
 #[test]
 fn rotate_handle_updates_the_angle_without_moving_the_camera() {

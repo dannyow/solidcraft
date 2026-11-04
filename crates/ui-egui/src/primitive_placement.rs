@@ -111,7 +111,7 @@ fn mm(v: f64) -> String {
 }
 
 /// A coordinate of a dropped point (mm) as a field shows it and OK sends it: in the design's
-/// length unit, kept to the micrometre in every unit, so a vertex at 38.1 mm reads "1.5 in", not
+/// length unit, kept to the nanometre in every unit, so a vertex at 38.1 mm reads "1.5 in", not
 /// "1.5000000000000002 in", and one in a metre design does not move by a rounded millimetre.
 fn coord(s: &Session, v: f64) -> String {
     let v = (v * 1e6).round() / 1e6;

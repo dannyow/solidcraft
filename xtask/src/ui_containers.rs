@@ -62,9 +62,11 @@ impl ContainerGuard {
         )
     }
 
-    /// `egui::Response::on_hover_text(response, text)`: the tooltip method called as a path.
-    fn tooltip_path(&self, names: &[String]) -> bool {
-        names.iter().any(|n| n == "egui" || self.modules.contains(n)) && names.last().is_some_and(|n| Self::raw_tooltip(n))
+    /// `egui::Response::on_hover_text(response, text)`, or the same through an imported or
+    /// aliased type: the tooltip method called as a path. Any path ending in one of the names
+    /// counts, so an alias cannot hide it.
+    fn tooltip_path(names: &[String]) -> bool {
+        names.len() >= 2 && names.last().is_some_and(|n| Self::raw_tooltip(n))
     }
 
     fn constructor(name: &str) -> bool {
@@ -103,7 +105,10 @@ impl ContainerGuard {
                     self.found.push(format!("raw tooltip in macro: .{ident}"));
                 }
             }
-            if self.tooltip_path(&names) {
+            // Only from the path's first segment: `egui::Response::on_hover_ui` is one path, not three.
+            let continues_a_path =
+                tokens.get(index.wrapping_sub(1)).is_some_and(|t| matches!(t, proc_macro2::TokenTree::Punct(p) if p.as_char() == ':'));
+            if !continues_a_path && Self::tooltip_path(&names) {
                 self.found.push(format!("raw tooltip in macro: {}", names.join("::")));
             }
         }
@@ -231,7 +236,7 @@ impl<'ast> Visit<'ast> for ContainerGuard {
         if names.iter().any(|n| matches!(n.as_str(), "shell_card" | "dock_frame")) {
             self.found.push(names.join("::"));
         }
-        if self.tooltip_path(&names) {
+        if Self::tooltip_path(&names) {
             self.found.push(format!("raw tooltip path {}", names.join("::")));
         }
         visit::visit_expr_path(self, path);
@@ -469,7 +474,11 @@ mod tests {
             response.on_hover_ui_at_pointer(|ui| {}).on_disabled_hover_ui(|ui| {});
             response.show_tooltip_ui(|ui| {});
             egui::Response::on_hover_text(response, tip);
+            R::on_hover_text(response, tip);
+            let show = Response::on_hover_ui;
         }
+        use egui::Response;
+        use egui::Response as R;
         macro_rules! tip { ($r:expr) => { $r.on_hover_text(text); egui::Response::on_hover_ui($r, body) }; }
     "#,
         );
@@ -486,6 +495,8 @@ mod tests {
                 "raw tooltip .show_tooltip_ui",
                 "raw tooltip in macro: .on_hover_text",
                 "raw tooltip in macro: egui::Response::on_hover_ui",
+                "raw tooltip path R::on_hover_text",
+                "raw tooltip path Response::on_hover_ui",
                 "raw tooltip path egui::Response::on_hover_text",
             ]
         );

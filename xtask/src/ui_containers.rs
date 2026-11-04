@@ -3,7 +3,8 @@ use std::path::Path;
 use syn::visit::{self, Visit};
 
 /// Every production UI host, including nested modules and platform apps, goes through the
-/// universal container. Parse Rust rather than searching strings: aliases cannot bypass this.
+/// universal container, and every tooltip through the kit's backing extension. Parse Rust rather
+/// than searching strings: aliases cannot bypass this.
 #[derive(Default)]
 struct ContainerGuard {
     modules: Vec<String>,
@@ -61,6 +62,11 @@ impl ContainerGuard {
         )
     }
 
+    /// `egui::Response::on_hover_text(response, text)`: the tooltip method called as a path.
+    fn tooltip_path(&self, names: &[String]) -> bool {
+        names.iter().any(|n| n == "egui" || self.modules.contains(n)) && names.last().is_some_and(|n| Self::raw_tooltip(n))
+    }
+
     fn constructor(name: &str) -> bool {
         matches!(name, "new" | "default" | "default_area" | "left" | "right" | "top" | "bottom" | "menu" | "context_menu" | "popup" | "window")
     }
@@ -89,10 +95,16 @@ impl ContainerGuard {
             {
                 self.found.push(format!("raw host in macro: {}", names.join("::")));
             }
-            if tokens.get(index.wrapping_sub(1)).is_some_and(|t| matches!(t, proc_macro2::TokenTree::Punct(p) if p.as_char() == '.'))
-                && matches!(ident.to_string().as_str(), "menu_button" | "menu_image_button" | "context_menu" | "shadow")
-            {
-                self.found.push(format!("raw popup/frame shorthand in macro: {ident}"));
+            if tokens.get(index.wrapping_sub(1)).is_some_and(|t| matches!(t, proc_macro2::TokenTree::Punct(p) if p.as_char() == '.')) {
+                if matches!(ident.to_string().as_str(), "menu_button" | "menu_image_button" | "context_menu" | "shadow") {
+                    self.found.push(format!("raw popup/frame shorthand in macro: {ident}"));
+                }
+                if Self::raw_tooltip(&ident.to_string()) {
+                    self.found.push(format!("raw tooltip in macro: .{ident}"));
+                }
+            }
+            if self.tooltip_path(&names) {
+                self.found.push(format!("raw tooltip in macro: {}", names.join("::")));
             }
         }
     }
@@ -218,6 +230,9 @@ impl<'ast> Visit<'ast> for ContainerGuard {
         }
         if names.iter().any(|n| matches!(n.as_str(), "shell_card" | "dock_frame")) {
             self.found.push(names.join("::"));
+        }
+        if self.tooltip_path(&names) {
+            self.found.push(format!("raw tooltip path {}", names.join("::")));
         }
         visit::visit_expr_path(self, path);
     }
@@ -359,7 +374,7 @@ pub fn run(root: &Path) -> Result<(), String> {
     if !failures.is_empty() {
         return Err(format!("Use ui_kit::Container for outer hosts and ui_kit::BackingTooltipExt for tooltips:\n{}", failures.join("\n")));
     }
-    println!("ui-containers: all outer hosts use the shared API");
+    println!("ui-containers: all outer hosts and tooltips use the shared API");
     Ok(())
 }
 
@@ -451,17 +466,27 @@ mod tests {
             ui.label(name).on_hover_ui(|ui| {});
             button.on_disabled_hover_text(why).on_hover_text_at_pointer(tip);
             response.show_tooltip_text(tip);
+            response.on_hover_ui_at_pointer(|ui| {}).on_disabled_hover_ui(|ui| {});
+            response.show_tooltip_ui(|ui| {});
+            egui::Response::on_hover_text(response, tip);
         }
+        macro_rules! tip { ($r:expr) => { $r.on_hover_text(text); egui::Response::on_hover_ui($r, body) }; }
     "#,
         );
         assert_eq!(
             bad,
             [
                 "raw tooltip .on_disabled_hover_text",
+                "raw tooltip .on_disabled_hover_ui",
                 "raw tooltip .on_hover_text",
                 "raw tooltip .on_hover_text_at_pointer",
                 "raw tooltip .on_hover_ui",
-                "raw tooltip .show_tooltip_text"
+                "raw tooltip .on_hover_ui_at_pointer",
+                "raw tooltip .show_tooltip_text",
+                "raw tooltip .show_tooltip_ui",
+                "raw tooltip in macro: .on_hover_text",
+                "raw tooltip in macro: egui::Response::on_hover_ui",
+                "raw tooltip path egui::Response::on_hover_text",
             ]
         );
         assert!(
@@ -473,6 +498,7 @@ mod tests {
             ui.label(name).backing_on_hover_ui(|ui| {});
             response.backing_show_tooltip_text(tip);
             response.on_hover_cursor(egui::CursorIcon::PointingHand);
+            let width = ui.spacing().tooltip_width;
         }
         #[cfg(test)] mod tests { fn fixture(response: egui::Response) { response.on_hover_text(tip); } }
     "#

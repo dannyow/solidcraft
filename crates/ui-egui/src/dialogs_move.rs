@@ -256,12 +256,13 @@ pub fn rows(ui: &mut egui::Ui, k: &mut Kind) -> bool {
 
 /// Where a point pick is: a round edge stands for its centre, where the model is before this
 /// move, in the world (a body of a placed component where its occurrence puts it, as it was
-/// picked); any other pick is where it was picked.
+/// picked); any other pick is where it was picked, as is a round edge of a model that cannot
+/// be placed.
 fn sel_point(app: &SolveApp, d: &Dialog, s: Option<&Sel>) -> Option<Vec3> {
     let s = s?;
     match s {
         Sel::Edge { body, index, point } => {
-            let st = model_before(app, d);
+            let st = model_before(app, d).unwrap_or_default();
             // The centre is found where the body was modelled; the picked point is where it stands.
             Some(crate::dialogs::edge_circle_in(&st, body, *index).map_or(*point, |(c, ..)| carried(d, on_moved(&bodies_of(app, d), s), c)))
         }
@@ -277,12 +278,12 @@ fn items(d: &Dialog, i: usize) -> &[Sel] {
 /// The model before an edited move, placed, kept for the frame's next reads of the same
 /// document and state: the canvas asks for the triad a few times a frame, and placing the model
 /// costs a transform of every placed body. Keyed by the Arcs themselves, so a freed and reused
-/// address cannot match. The last entry stays until another edited move replaces it.
+/// address cannot match. A placement that failed is kept as `None`, so it is not tried again on
+/// every read. The last entry stays until another edited move replaces it.
 struct PlacedBefore {
     doc: std::sync::Arc<solidcraft_engine::doc::Document>,
-    feature: u64,
     before: std::sync::Arc<solidcraft_engine::doc::ModelState>,
-    placed: std::sync::Arc<solidcraft_engine::doc::ModelState>,
+    placed: Option<std::sync::Arc<solidcraft_engine::doc::ModelState>>,
 }
 
 thread_local! {
@@ -291,35 +292,43 @@ thread_local! {
 
 /// The model this move looks at, placed in the world as every pick reads it (a body of a placed
 /// component where its occurrence puts it, a second placement's body under its own name): the
-/// model before the move being edited, else the session's. A model that cannot be placed is
-/// read unplaced, so the dialog still works (the viewport says why the placement failed); the
-/// triad then sits where the component was modelled.
-fn model_before(app: &SolveApp, d: &Dialog) -> std::sync::Arc<solidcraft_engine::doc::ModelState> {
-    let Some((id, _)) = d.editing else {
-        return app.session.world_state().unwrap_or_else(|_| app.session.model.state());
-    };
+/// model before the move being edited, else the session's. `None` when the model cannot be
+/// placed; each caller then falls back on its own (the picked point, the bodies [`unplaced`]).
+/// The viewport reports a failed placement of the session's model, not of the model before an
+/// edited move.
+fn model_before(app: &SolveApp, d: &Dialog) -> Option<std::sync::Arc<solidcraft_engine::doc::ModelState>> {
+    let Some((id, _)) = d.editing else { return app.session.world_state().ok() };
     let before = app.session.model.state_before(id);
     if app.session.doc.occurrences.is_empty() {
-        return before;
+        return Some(before);
     }
     let kept = PLACED_BEFORE.with(|c| {
         c.borrow()
             .as_ref()
-            .filter(|p| p.feature == id && std::sync::Arc::ptr_eq(&p.doc, &app.session.doc) && std::sync::Arc::ptr_eq(&p.before, &before))
+            .filter(|p| std::sync::Arc::ptr_eq(&p.doc, &app.session.doc) && std::sync::Arc::ptr_eq(&p.before, &before))
             .map(|p| p.placed.clone())
     });
     if let Some(placed) = kept {
         return placed;
     }
-    // A failed placement is kept too: it is not tried again on every read.
-    let placed = solidcraft_engine::doc::world_state(&app.session.doc, &before).map_or_else(|_| before.clone(), std::sync::Arc::new);
-    PLACED_BEFORE.with(|c| *c.borrow_mut() = Some(PlacedBefore { doc: app.session.doc.clone(), feature: id, before, placed: placed.clone() }));
+    let placed = solidcraft_engine::doc::world_state(&app.session.doc, &before).ok().map(std::sync::Arc::new);
+    PLACED_BEFORE.with(|c| *c.borrow_mut() = Some(PlacedBefore { doc: app.session.doc.clone(), before, placed: placed.clone() }));
     placed
+}
+
+/// The bodies where they were modelled: before the move being edited, else the session's final
+/// model. What the triad and the ring read when the model cannot be placed, so the dialog
+/// stays usable.
+fn unplaced(app: &SolveApp, d: &Dialog) -> std::sync::Arc<solidcraft_engine::doc::ModelState> {
+    match d.editing {
+        Some((id, _)) => app.session.model.state_before(id),
+        None => app.session.model.state(),
+    }
 }
 
 /// The centre of the picked bodies where they are before this move (after the earlier types').
 fn bodies_center(app: &SolveApp, d: &Dialog) -> Option<Vec3> {
-    let st = model_before(app, d);
+    let st = model_before(app, d).unwrap_or_else(|| unplaced(app, d));
     let mut bb: Option<(Vec3, Vec3)> = None;
     for n in bodies_of(app, d) {
         let Some(b) = st.body(&n) else { continue };
@@ -518,7 +527,7 @@ fn modelled_axis(app: &SolveApp, d: &Dialog, s: &Sel) -> Option<(Vec3, Vec3)> {
         return Some(a);
     }
     let Sel::Edge { body, index, .. } = s else { return None };
-    let st = model_before(app, d);
+    let st = model_before(app, d).unwrap_or_else(|| unplaced(app, d));
     let m = st.body(body)?.mesh();
     let e = m.edges.get(*index)?;
     let (a, b) = (*e.first()?, *e.last()?);

@@ -184,6 +184,33 @@ fn a_model_that_cannot_be_placed_keeps_the_move_usable() {
     assert!(pivot.is_some_and(|p| p.dist(picked) < 1e-9), "an edge pivot stays at its picked point, got {pivot:?}");
 }
 
+/// Editing a move of a body in a placed component: the frame's reads of the model before the
+/// move share one placement, and a change to the design (a new parameter replaces the document)
+/// places it again.
+#[test]
+fn the_placed_model_before_an_edited_move_is_shared_until_the_design_changes() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
+    let d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
+    let first = model_before(&h.app, &d).unwrap();
+    let second = model_before(&h.app, &d).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second), "two reads in one frame share one placement");
+    let doc = h.app.session.doc.clone();
+    let before = h.app.session.model.state_before(moved);
+    h.app.run("parameters.add", json!({"name": "travel", "expression": "4 mm"})).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&doc, &h.app.session.doc), "the premise: adding a parameter replaced the document");
+    assert!(
+        std::sync::Arc::ptr_eq(&before, &h.app.session.model.state_before(moved)),
+        "the premise: the model before the move is the same state, so only the document tells the reads apart"
+    );
+    let third = model_before(&h.app, &d).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &third), "a read after the design changed places the model again");
+}
+
 /// #6822: Rotate must offer a draggable handle after the body and axis are picked.
 #[test]
 fn rotate_handle_updates_the_angle_without_moving_the_camera() {

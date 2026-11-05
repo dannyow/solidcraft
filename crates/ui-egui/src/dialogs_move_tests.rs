@@ -129,6 +129,7 @@ fn move_triad_and_ring_sit_on_the_placed_body() {
 
 /// Editing a move of a body in a placed component: the triad sits where the body is, placed,
 /// before that move (plus the move's own distances), not where the component was modelled.
+/// The edit is opened as the timeline opens it, which rolls the design back to before the move.
 #[test]
 fn editing_a_move_puts_the_triad_on_the_placed_body() {
     let mut h = crate::scenario::Harness::new();
@@ -136,11 +137,18 @@ fn editing_a_move_puts_the_triad_on_the_placed_body() {
     h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
     h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
     h.app.run("component.activate", json!({"component": "root"})).unwrap();
-    let before = crate::open_meshing::session_world(&h.app.session).body("Body1").unwrap().mesh().bounds();
+    let bounds = |h: &crate::scenario::Harness| crate::open_meshing::session_world(&h.app.session).body("Body1").unwrap().mesh().bounds();
+    let before = bounds(&h);
     let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
-    let d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
+    h.app.edit_feature(moved);
+    h.frames(2);
+    assert_eq!(h.app.session.doc.marker, h.app.session.doc.feature_index(moved), "the premise: the editor rolled the design back to before the move");
+    let now = bounds(&h);
+    assert!(now.min.dist(before.min) < 1e-9 && now.max.dist(before.max) < 1e-9, "the premise: the session's placed model is the one before the move");
+    let d = h.app.dialog.as_ref().expect("the move's dialog is open");
+    assert_eq!(d.editing.map(|(id, _)| id), Some(moved), "the premise: the dialog edits the move");
     let expected = (before.min + before.max) * 0.5 + Vec3::new(0.0, -4.0, 0.0);
-    let got = triad(&h.app, &d).map(|t| t.center);
+    let got = triad(&h.app, d).map(|t| t.center);
     assert!(got.is_some_and(|c| c.dist(expected) < 1e-6), "the triad sits at the placed body before the edited move, {expected:?}, got {got:?}");
 }
 
@@ -155,19 +163,22 @@ fn a_model_that_cannot_be_placed_keeps_the_move_usable() {
     h.app.run("sketch.create", json!({"plane": "XY", "name": "Outline"})).unwrap();
     h.app.run("solid.cylinder", json!({"base": [0, 0, 0], "axis": [0, 0, 1], "radius": 10, "height": 20})).unwrap();
     h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let before = h.app.session.model.state().body("Body1").unwrap().mesh().bounds();
     let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
+    h.app.edit_feature(moved);
+    h.frames(2);
+    assert_eq!(h.app.session.doc.marker, h.app.session.doc.feature_index(moved), "the premise: the editor rolled the design back to before the move");
     // A placement that folds y onto x: its sketch plane has no second axis, so placing fails.
     let mut doc = (*h.app.session.doc).clone();
     doc.occurrences[0].transform[1] = [1.0, 0.0, 0.0, 0.0];
     h.app.session.doc = std::sync::Arc::new(doc);
-    let unplaced = h.app.session.model.state_before(moved);
-    assert!(
-        solidcraft_engine::doc::world_state(&h.app.session.doc, &unplaced).is_err(),
-        "the premise: the model before the move cannot be placed, as the dialog places it"
-    );
+    assert!(h.app.session.world_state().is_err(), "the premise: the model cannot be placed, as the dialog places it");
+    let unplaced = h.app.session.model.state();
     let bounds = unplaced.body("Body1").unwrap().mesh().bounds();
+    assert!(bounds.min.dist(before.min) < 1e-9 && bounds.max.dist(before.max) < 1e-9, "the premise: the session's model is the one before the move");
     let centre = (bounds.min + bounds.max) * 0.5;
-    let mut d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
+    let mut d = h.app.dialog.clone().expect("the move's dialog is open");
+    assert_eq!(d.editing.map(|(id, _)| id), Some(moved), "the premise: the dialog edits the move");
     let got = pivot(&h.app, &d);
     assert!(got.is_some_and(|c| c.dist(centre) < 1e-6), "the triad's pivot is the unplaced body's centre before the move, {centre:?}, got {got:?}");
     assert!(triad(&h.app, &d).is_some(), "the triad shows");
@@ -185,69 +196,6 @@ fn a_model_that_cannot_be_placed_keeps_the_move_usable() {
     d.inputs[1].items = vec![Sel::Edge { body: "Body1".into(), index: round.unwrap(), point: picked }];
     let pivot = sel_point(&h.app, &d, d.inputs[1].items.first());
     assert!(pivot.is_some_and(|p| p.dist(picked) < 1e-9), "an edge pivot stays at its picked point, got {pivot:?}");
-}
-
-/// Editing a move of a body in a placed component: the frame's reads of the model before the
-/// move share one placement, and a change to the design (a new parameter replaces the document)
-/// places it again.
-#[test]
-fn the_placed_model_before_an_edited_move_is_shared_until_the_design_changes() {
-    let mut h = crate::scenario::Harness::new();
-    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
-    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
-    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
-    h.app.run("component.activate", json!({"component": "root"})).unwrap();
-    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
-    let d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
-    let first = model_before(&h.app, &d).unwrap();
-    let second = model_before(&h.app, &d).unwrap();
-    assert!(std::sync::Arc::ptr_eq(&first, &second), "two reads in one frame share one placement");
-    let doc = h.app.session.doc.clone();
-    let before = h.app.session.model.state_before(moved);
-    h.app.run("parameters.add", json!({"name": "travel", "expression": "4 mm"})).unwrap();
-    assert!(!std::sync::Arc::ptr_eq(&doc, &h.app.session.doc), "the premise: adding a parameter replaced the document");
-    assert!(
-        std::sync::Arc::ptr_eq(&before, &h.app.session.model.state_before(moved)),
-        "the premise: the model before the move is the same state, so only the document tells the reads apart"
-    );
-    let third = model_before(&h.app, &d).unwrap();
-    assert!(!std::sync::Arc::ptr_eq(&first, &third), "a read after the design changed places the model again");
-}
-
-/// The placed model before an edited move (a copy of every placed body, with the design it was
-/// placed from) is kept for the dialog editing the move, and no longer: it goes when that dialog
-/// closes, when a Move that edits nothing reads, and when another design replaces the old one.
-#[test]
-fn the_placed_model_before_an_edited_move_goes_with_its_dialog() {
-    let mut h = crate::scenario::Harness::new();
-    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
-    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
-    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
-    h.app.run("component.activate", json!({"component": "root"})).unwrap();
-    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
-    let kept = || PLACED_BEFORE.with(|c| c.borrow().is_some());
-    let edit = |h: &crate::scenario::Harness| {
-        let d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
-        assert!(model_before(&h.app, &d).is_some(), "the premise: the model before the move is placed");
-        d
-    };
-    let d = edit(&h);
-    assert!(kept(), "the premise: the read kept the placed model");
-    h.app.dialog = Some(d);
-    crate::dialogs::cancel(&mut h.app);
-    assert!(h.app.dialog.is_none() && !kept(), "the entry goes when its dialog closes");
-    let _ = edit(&h);
-    assert!(kept());
-    h.app.start("solid.move");
-    let fresh = h.app.dialog.clone().unwrap();
-    assert!(fresh.editing.is_none(), "the premise: a fresh Move edits nothing");
-    assert!(model_before(&h.app, &fresh).is_some(), "the premise: a Move that edits nothing reads the session's model");
-    assert!(!kept(), "a Move that edits nothing lets the entry go");
-    h.app.dialog = None;
-    let _ = edit(&h);
-    assert!(kept());
-    h.app.run("file.new", json!({})).unwrap();
-    assert!(!kept(), "a new design lets the old design's entry go");
 }
 
 /// Editing a move of a body in a placed component as Rotate about one of the body's edges: the
@@ -276,7 +224,11 @@ fn editing_a_move_puts_the_ring_on_an_edge_of_the_placed_body_before_the_move() 
         (dir2.cross(dir).len() > 1e-3 || (a2 - a).cross(dir).len() > 1e-3).then_some((i, a, dir))
     });
     let (index, a, dir) = edge.expect("the premise: an edge of the box leaves its line under the move");
-    let mut d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
+    h.app.edit_feature(moved);
+    h.frames(2);
+    assert_eq!(h.app.session.doc.marker, h.app.session.doc.feature_index(moved), "the premise: the editor rolled the design back to before the move");
+    let mut d = h.app.dialog.clone().expect("the move's dialog is open");
+    assert_eq!(d.editing.map(|(id, _)| id), Some(moved), "the premise: the dialog edits the move");
     d.kind = kind(ROTATE, &h.app.session.doc);
     d.inputs = inputs(ROTATE);
     d.inputs[0].items = vec![Sel::Body { name: "Body1".into() }];

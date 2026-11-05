@@ -3651,7 +3651,6 @@ pub(crate) fn sync_feature_edit(app: &mut SolveApp) {
         // Undo or deletion already chose the current document and history. Cancel's rollback
         // would try to restore the obsolete editing session; just discard its work instead.
         app.dialog = None;
-        crate::dialogs_move::forget_placed_before();
         app.applying = None;
         if let Some(state) = app.editing_state.take() {
             // Undo can save the editor's temporary rollback in Redo (deletion saves it in
@@ -4136,7 +4135,6 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     if !keep || cancel {
         app.session.feature_edit_sketch = None;
-        crate::dialogs_move::forget_placed_before();
         crate::dialogs_motion::closed(app, &mut d, applied);
         if let Kind::Text(k) = &mut d.kind {
             crate::sketch_text::closed(app, k, applied);
@@ -4177,7 +4175,6 @@ pub fn cancel(app: &mut SolveApp) {
         pending.cancel();
     }
     app.applying = None;
-    crate::dialogs_move::forget_placed_before();
     if let Some(mut d) = app.dialog.take() {
         crate::dialogs_motion::closed(app, &mut d, false);
         if let Kind::Text(k) = &mut d.kind {
@@ -5888,7 +5885,20 @@ pub fn axis_of(app: &SolveApp, sel: &Sel) -> Option<(Vec3, Vec3)> {
             Some((pa, (pb - pa).normalized()?))
         }
         // A straight model edge, along it; a circular one, about its axis.
-        Sel::Edge { body, index, .. } => edge_axis_in(&crate::open_meshing::session_world(&app.session), body, *index),
+        Sel::Edge { body, index, .. } => {
+            let b = crate::open_meshing::session_world(&app.session).body(body).cloned()?;
+            let m = b.mesh();
+            let e = m.edges.get(*index)?;
+            let (a, z) = (*e.first()?, *e.last()?);
+            let Some(dir) = (z - a).normalized() else { return round_axis(&app.session, sel) };
+            let tol = 1e-6 * a.dist(z).max(1.0);
+            if !e.iter().all(|p| (*p - a).cross(dir).len() < tol) {
+                return round_axis(&app.session, sel);
+            }
+            // An edge along an origin axis points the way the axis does (as picking the axis).
+            let axis = [Vec3::X, Vec3::Y, Vec3::Z].into_iter().find(|x| dir.dot(*x).abs() > 1.0 - 1e-9);
+            Some((a, axis.unwrap_or(dir)))
+        }
         // A cylinder, cone or torus face: its axis.
         Sel::Face { .. } => round_axis(&app.session, sel),
         _ => None,
@@ -5909,27 +5919,6 @@ pub(crate) fn edge_circle_in(st: &solidcraft_engine::doc::ModelState, body: &str
     let tol = (b.body.size() * 1e-6).max(1e-9) * 10.0;
     let on = |p: &Vec3| (p.dist(c.center) - c.radius).abs() <= tol && (*p - c.center).dot(*c.axis).abs() <= tol;
     b.mesh().edges.get(index)?.iter().all(on).then_some((c.center, *c.axis, c.radius))
-}
-
-/// The axis a model edge stands for, in a given model state (a dialog editing a feature looks at
-/// the model before it): a straight edge along itself, a circular one about its axis (through
-/// the centre, along the normal, pointing the way the command will find it, as [`round_axis`]).
-/// `None` for any other edge, and for a body or an edge the state does not have.
-pub(crate) fn edge_axis_in(st: &solidcraft_engine::doc::ModelState, body: &str, index: usize) -> Option<(Vec3, Vec3)> {
-    let b = st.body(body)?;
-    let m = b.mesh();
-    let e = m.edges.get(index)?;
-    let (a, z) = (*e.first()?, *e.last()?);
-    if let Some(dir) = (z - a).normalized() {
-        let tol = 1e-6 * a.dist(z).max(1.0);
-        if e.iter().all(|p| (*p - a).cross(dir).len() < tol) {
-            // An edge along an origin axis points the way the axis does (as picking the axis).
-            let axis = [Vec3::X, Vec3::Y, Vec3::Z].into_iter().find(|x| dir.dot(*x).abs() > 1.0 - 1e-9);
-            return Some((a, axis.unwrap_or(dir)));
-        }
-    }
-    let (c, n, _) = edge_circle_in(st, body, index)?;
-    c.is_finite().then(|| (c, solidcraft_engine::doc::construct::canonical_dir(n)))
 }
 
 /// The axis of a circular edge (through its centre, along its normal) or of a cylinder, cone or

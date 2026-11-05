@@ -262,7 +262,7 @@ fn sel_point(app: &SolveApp, d: &Dialog, s: Option<&Sel>) -> Option<Vec3> {
     let s = s?;
     match s {
         Sel::Edge { body, index, point } => {
-            let st = model_before(app, d).unwrap_or_default();
+            let st = placed_model(app).unwrap_or_default();
             // The centre is found where the body was modelled; the picked point is where it stands.
             Some(crate::dialogs::edge_circle_in(&st, body, *index).map_or(*point, |(c, ..)| carried(d, on_moved(&bodies_of(app, d), s), c)))
         }
@@ -275,71 +275,19 @@ fn items(d: &Dialog, i: usize) -> &[Sel] {
     crate::selection::items(&d.inputs, i)
 }
 
-/// The model before an edited move, placed, kept for the frame's next reads of the same
-/// document and state: the canvas asks for the triad a few times a frame, and placing the model
-/// costs a transform of every placed body. Keyed by the Arcs themselves, so a freed and reused
-/// address cannot match. A placement that failed is kept as `None`, so it is not tried again on
-/// every read. The entry goes with the dialog it was for ([`forget_placed_before`]).
-struct PlacedBefore {
-    doc: std::sync::Arc<solidcraft_engine::doc::Document>,
-    before: std::sync::Arc<solidcraft_engine::doc::ModelState>,
-    placed: Option<std::sync::Arc<solidcraft_engine::doc::ModelState>>,
-}
-
-thread_local! {
-    static PLACED_BEFORE: std::cell::RefCell<Option<PlacedBefore>> = const { std::cell::RefCell::new(None) };
-}
-
 /// The model this move looks at, placed in the world as every pick reads it (a body of a placed
-/// component where its occurrence puts it, a second placement's body under its own name): the
-/// model before the move being edited, else the session's. `None` when the model cannot be
-/// placed; each caller then falls back on its own (the picked point, the bodies [`unplaced`]).
-/// The viewport reports a failed placement of the session's model, not of the model before an
-/// edited move.
-fn model_before(app: &SolveApp, d: &Dialog) -> Option<std::sync::Arc<solidcraft_engine::doc::ModelState>> {
-    let Some((id, _)) = d.editing else {
-        // A move that edits nothing reads the session's model; no edited move's entry is wanted.
-        forget_placed_before();
-        return app.session.world_state().ok();
-    };
-    let before = app.session.model.state_before(id);
-    if app.session.doc.occurrences.is_empty() {
-        return Some(before);
-    }
-    let kept = PLACED_BEFORE.with(|c| {
-        c.borrow()
-            .as_ref()
-            .filter(|p| std::sync::Arc::ptr_eq(&p.doc, &app.session.doc) && std::sync::Arc::ptr_eq(&p.before, &before))
-            .map(|p| p.placed.clone())
-    });
-    if let Some(placed) = kept {
-        return placed;
-    }
-    let placed = solidcraft_engine::doc::world_state(&app.session.doc, &before).ok().map(std::sync::Arc::new);
-    PLACED_BEFORE.with(|c| *c.borrow_mut() = Some(PlacedBefore { doc: app.session.doc.clone(), before, placed: placed.clone() }));
-    placed
-}
-
-/// Let the placed model before an edited move go, with the design and the state it was keyed
-/// by: the dialog it was for closed (OK, Cancel, its feature gone), a Move that edits nothing
-/// is open, or another design took the old one's place. A later read places the model again.
-pub(crate) fn forget_placed_before() {
-    PLACED_BEFORE.with(|c| *c.borrow_mut() = None);
-}
-
-/// The bodies where they were modelled: before the move being edited, else the session's final
-/// model. What the triad and the ring read when the model cannot be placed, so the dialog
-/// stays usable.
-fn unplaced(app: &SolveApp, d: &Dialog) -> std::sync::Arc<solidcraft_engine::doc::ModelState> {
-    match d.editing {
-        Some((id, _)) => app.session.model.state_before(id),
-        None => app.session.model.state(),
-    }
+/// component where its occurrence puts it, a second placement's body under its own name). While
+/// a move is edited this is already the model before it: the editor rolls the timeline back to
+/// just before the feature, so the session's model stops there and nothing more is needed.
+/// `None` when the model cannot be placed; each caller then falls back on its own (the picked
+/// point, the bodies where they were modelled).
+fn placed_model(app: &SolveApp) -> Option<std::sync::Arc<solidcraft_engine::doc::ModelState>> {
+    app.session.world_state().ok()
 }
 
 /// The centre of the picked bodies where they are before this move (after the earlier types').
 fn bodies_center(app: &SolveApp, d: &Dialog) -> Option<Vec3> {
-    let st = model_before(app, d).unwrap_or_else(|| unplaced(app, d));
+    let st = placed_model(app).unwrap_or_else(|| app.session.model.state());
     let mut bb: Option<(Vec3, Vec3)> = None;
     for n in bodies_of(app, d) {
         let Some(b) = st.body(&n) else { continue };
@@ -523,28 +471,28 @@ fn step(app: &SolveApp, d: &Dialog) -> Result<Step, String> {
 }
 
 /// An axis line: origin axes and sketch lines, a straight or circular body edge, or a cylinder,
-/// cone or torus face (`modelled_axis`); on a moved body, where the earlier types' move puts it.
+/// cone or torus face (`dialogs::axis_of`), or a straight edge of a body where it is placed;
+/// on a moved body, where the earlier types' move puts it.
 fn axis_line(app: &SolveApp, d: &Dialog, s: &Sel) -> Option<(Vec3, Vec3)> {
-    let (o, a) = modelled_axis(app, d, s)?;
+    let (o, a) = modelled_axis(app, s)?;
     match chain(d) {
         Some(c) if on_moved(&bodies_of(app, d), s) => Some((apply_point(&c, o), apply_vector(&c, a))),
         _ => Some((o, a)),
     }
 }
 
-/// The line an axis pick stands for. While a move is edited, a model edge is read where the
-/// bodies are before that move, placed, where the ring's centre is read too (the session's
-/// final model has the edge after the move, off that centre by the move itself); every other
-/// pick, and every pick of a move that edits nothing, is what `dialogs::axis_of` answers from
-/// the session's model.
-fn modelled_axis(app: &SolveApp, d: &Dialog, s: &Sel) -> Option<(Vec3, Vec3)> {
-    if d.editing.is_some()
-        && let Sel::Edge { body, index, .. } = s
-    {
-        let st = model_before(app, d).unwrap_or_else(|| unplaced(app, d));
-        return crate::dialogs::edge_axis_in(&st, body, *index);
+fn modelled_axis(app: &SolveApp, s: &Sel) -> Option<(Vec3, Vec3)> {
+    if let Some(a) = crate::dialogs::axis_of(app, s) {
+        return Some(a);
     }
-    crate::dialogs::axis_of(app, s)
+    let Sel::Edge { body, index, .. } = s else { return None };
+    let st = placed_model(app).unwrap_or_else(|| app.session.model.state());
+    let m = st.body(body)?.mesh();
+    let e = m.edges.get(*index)?;
+    let (a, b) = (*e.first()?, *e.last()?);
+    let dir = (b - a).normalized()?;
+    // Straight: every point on the chord.
+    e.iter().all(|p| (*p - a).cross(dir).len() < 1e-6 * (1.0 + (b - a).len())).then_some((a, dir))
 }
 
 /// Where the triad sits: the pivot carried by the move so far (Free Move and Translate only).

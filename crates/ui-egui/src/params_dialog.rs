@@ -1589,13 +1589,18 @@ mod tests {
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
         assert!(banner(&h).is_some_and(|e| e.contains("already a parameter")), "{:?}", banner(&h));
+        let revision = h.app.session.revision;
+        // Let the clicks that filled the draft age, or egui counts the double-click as a triple.
+        h.frames(30);
         h.run(&json!([{"click": {"handle": "param:name:depth"}, "double": true}, {"key": "A", "cmd": true}, {"text": "width"}])).unwrap();
+        assert!(h.app.params.as_ref().unwrap().renaming.is_some(), "double click enters rename mode");
         // The rename commits when its box loses the focus, here to the add row's name box.
         h.step(&json!({"click": {"handle": "param:new:name"}})).unwrap();
         h.frames(2);
         let d = h.app.params.as_ref().unwrap();
         assert!(d.error.as_deref().is_some_and(|e| e.contains("already a parameter `width`")), "the rename is refused: {:?}", d.error);
-        assert!(d.new_refused.is_some(), "the draft is still refused too");
+        assert_ne!(revision, h.app.session.revision, "a refused rename restores the design and refreshes it, which moves the revision");
+        assert!(d.new_refused.is_none(), "so the draft's own snapshot is already gone, and the rename's message is untouched by that");
         assert_eq!(h.app.session.doc.param("depth").unwrap().expr, "5 mm");
         h.step(&json!({"text": "2"})).unwrap();
         h.frames(2);

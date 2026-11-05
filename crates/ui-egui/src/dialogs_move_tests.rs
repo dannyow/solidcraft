@@ -227,6 +227,9 @@ fn editing_a_move_puts_the_ring_on_an_edge_of_the_placed_body_before_the_move() 
     h.app.edit_feature(moved);
     h.frames(2);
     assert_eq!(h.app.session.doc.marker, h.app.session.doc.feature_index(moved), "the premise: the editor rolled the design back to before the move");
+    let (was, now) =
+        (world.body("Body1").unwrap().mesh().bounds(), crate::open_meshing::session_world(&h.app.session).body("Body1").unwrap().mesh().bounds());
+    assert!(now.min.dist(was.min) < 1e-9 && now.max.dist(was.max) < 1e-9, "the premise: the session's placed model is the one before the move");
     let mut d = h.app.dialog.clone().expect("the move's dialog is open");
     assert_eq!(d.editing.map(|(id, _)| id), Some(moved), "the premise: the dialog edits the move");
     d.kind = kind(ROTATE, &h.app.session.doc);

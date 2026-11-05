@@ -160,8 +160,11 @@ fn a_model_that_cannot_be_placed_keeps_the_move_usable() {
     let mut doc = (*h.app.session.doc).clone();
     doc.occurrences[0].transform[1] = [1.0, 0.0, 0.0, 0.0];
     h.app.session.doc = std::sync::Arc::new(doc);
-    assert!(h.app.session.world_state().is_err(), "the premise: this model cannot be placed");
     let unplaced = h.app.session.model.state_before(moved);
+    assert!(
+        solidcraft_engine::doc::world_state(&h.app.session.doc, &unplaced).is_err(),
+        "the premise: the model before the move cannot be placed, as the dialog places it"
+    );
     let bounds = unplaced.body("Body1").unwrap().mesh().bounds();
     let centre = (bounds.min + bounds.max) * 0.5;
     let mut d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
@@ -209,6 +212,80 @@ fn the_placed_model_before_an_edited_move_is_shared_until_the_design_changes() {
     );
     let third = model_before(&h.app, &d).unwrap();
     assert!(!std::sync::Arc::ptr_eq(&first, &third), "a read after the design changed places the model again");
+}
+
+/// The placed model before an edited move (a copy of every placed body, with the design it was
+/// placed from) is kept for the dialog editing the move, and no longer: it goes when that dialog
+/// closes, when a Move that edits nothing reads, and when another design replaces the old one.
+#[test]
+fn the_placed_model_before_an_edited_move_goes_with_its_dialog() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
+    let kept = || PLACED_BEFORE.with(|c| c.borrow().is_some());
+    let edit = |h: &crate::scenario::Harness| {
+        let d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
+        assert!(model_before(&h.app, &d).is_some(), "the premise: the model before the move is placed");
+        d
+    };
+    let d = edit(&h);
+    assert!(kept(), "the premise: the read kept the placed model");
+    h.app.dialog = Some(d);
+    crate::dialogs::cancel(&mut h.app);
+    assert!(h.app.dialog.is_none() && !kept(), "the entry goes when its dialog closes");
+    let _ = edit(&h);
+    assert!(kept());
+    h.app.start("solid.move");
+    let fresh = h.app.dialog.clone().unwrap();
+    assert!(fresh.editing.is_none(), "the premise: a fresh Move edits nothing");
+    assert!(model_before(&h.app, &fresh).is_some(), "the premise: a Move that edits nothing reads the session's model");
+    assert!(!kept(), "a Move that edits nothing lets the entry go");
+    h.app.dialog = None;
+    let _ = edit(&h);
+    assert!(kept());
+    h.app.run("file.new", json!({})).unwrap();
+    assert!(!kept(), "a new design lets the old design's entry go");
+}
+
+/// Editing a move of a body in a placed component as Rotate about one of the body's edges: the
+/// ring turns about the edge where the body is before the move, placed (where the ring's centre
+/// is read), not about the edge where the move leaves the body.
+#[test]
+fn editing_a_move_puts_the_ring_on_an_edge_of_the_placed_body_before_the_move() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let world = crate::open_meshing::session_world(&h.app.session);
+    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
+    let after = crate::open_meshing::session_world(&h.app.session);
+    let chord = |st: &solidcraft_engine::doc::ModelState, i: usize| -> Option<(Vec3, Vec3)> {
+        let e = st.body("Body1")?.mesh().edges.get(i)?.clone();
+        let (a, z) = (*e.first()?, *e.last()?);
+        Some((a, (z - a).normalized()?))
+    };
+    // A straight edge the move takes off its line (one along the move's own direction stays on it).
+    let edges = world.body("Body1").unwrap().mesh().edges.len();
+    let edge = (0..edges).find_map(|i| {
+        let (a, dir) = chord(&world, i)?;
+        let (a2, dir2) = chord(&after, i)?;
+        (dir2.cross(dir).len() > 1e-3 || (a2 - a).cross(dir).len() > 1e-3).then_some((i, a, dir))
+    });
+    let (index, a, dir) = edge.expect("the premise: an edge of the box leaves its line under the move");
+    let mut d = crate::dialogs::for_feature(&h.app, moved, None).unwrap();
+    d.kind = kind(ROTATE, &h.app.session.doc);
+    d.inputs = inputs(ROTATE);
+    d.inputs[0].items = vec![Sel::Body { name: "Body1".into() }];
+    d.inputs[1].items = vec![Sel::Edge { body: "Body1".into(), index, point: a }];
+    let ring = rotation_axis(&h.app, &d);
+    assert!(
+        ring.is_some_and(|(o, axis)| axis.cross(dir).len() < 1e-9 && (o - a).cross(dir).len() < 1e-6),
+        "the ring turns about the edge where the body is before the move, through {a:?} along {dir:?}, got {ring:?}"
+    );
 }
 
 /// #6822: Rotate must offer a draggable handle after the body and axis are picked.

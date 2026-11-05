@@ -1497,6 +1497,7 @@ impl SolveApp {
                     self.edit_in_place.active = None;
                     render_workspace::reset_document(self);
                     dim_view::cancel();
+                    dialogs_move::forget_placed_before();
                     design_properties::close_object(self);
                     timeline::stop_playback(self);
                     self.menu.props = None;

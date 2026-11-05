@@ -1473,7 +1473,7 @@ mod tests {
         assert_eq!(h.app.params.as_ref().unwrap().new_unit, 1);
         h.step(&json!({"click": {"handle": "dialog:Filter"}})).unwrap();
         assert_eq!(h.app.session.doc.param("width").unwrap().unit, "cm");
-        assert!(h.app.params.as_ref().unwrap().error.is_none());
+        assert!(h.app.params.as_ref().unwrap().banner().is_none());
     }
 
     /// A refused add's message is about the draft it ran with: correcting the draft takes the
@@ -1609,6 +1609,58 @@ mod tests {
         assert!(d.new_refused.is_none(), "the draft's own refusal is gone");
         assert!(d.error.as_deref().is_some_and(|e| e.contains("already a parameter `width`")), "the rename's message stays: {:?}", d.error);
         assert!(d.banner().is_some());
+    }
+
+    /// A unit or comment edit changes the draft the message was about, so the message goes with
+    /// it, although neither cures a taken name: Enter checks again and says so again.
+    #[test]
+    fn a_unit_or_comment_edit_on_a_refused_new_parameter_clears_its_message() {
+        let mut h = taken_name_draft();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"));
+        h.step(&json!({"click": {"handle": "param:new:unit"}})).unwrap();
+        h.step(&json!({"click": {"handle": "dialog:Unit:cm"}})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.params.as_ref().unwrap().new_unit, 1);
+        assert_eq!(banner(&h), None, "the message was about the draft in mm");
+        // The unit menu holds the focus after a pick; Enter submits from one of the row's boxes.
+        h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"), "Enter checks the draft again");
+        h.step(&json!({"click": {"handle": "param:new:comment"}})).unwrap();
+        h.step(&json!({"text": "Overall width"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.params.as_ref().unwrap().new_comment, "Overall width");
+        assert_eq!(banner(&h), None, "the message was about the draft without a comment");
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"), "Enter checks the draft again");
+        assert_eq!(h.app.session.doc.param("width").unwrap().expr, "10 mm", "nothing was added");
+    }
+
+    /// With a row's message and the add row's refusal both alive, the banner shows the newer one.
+    /// A row's expression that fails its check runs no command, so the design stays and the add
+    /// row's refusal stays with it, under the row's message; a refusal after that takes the
+    /// banner back, as any action's result did.
+    #[test]
+    fn the_banner_shows_the_newer_of_a_rows_message_and_the_add_rows_refusal() {
+        let mut h = taken_name_draft();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"));
+        // The click into `depth` leaves the add row, which attempts the draft once more and is
+        // refused with the same words; then the row's expression is made to name nothing.
+        h.run(&json!([{"click": {"handle": "param:depth"}}, {"key": "A", "cmd": true}, {"text": "missing + 1 mm"}, {"key": "Enter"}])).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some("unknown parameter `missing`"), "the row's message is the newer one");
+        assert_eq!(h.app.session.doc.param("depth").unwrap().expr, "5 mm");
+        h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"), "the add row's refusal is the newer one");
+        assert_eq!(h.app.params.as_ref().unwrap().editing.get("depth").map(String::as_str), Some("missing + 1 mm"), "the row's edit is kept");
     }
 
     /// #8563: sorting orders each section, and each model group, by itself.
@@ -1859,7 +1911,7 @@ mod tests {
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
         assert!(h.app.session.doc.params.iter().all(|p| p.name != "width"), "no expression: nothing added");
-        assert_eq!(h.app.params.as_ref().unwrap().error, None, "and nothing wrong is said");
+        assert_eq!(h.app.params.as_ref().unwrap().banner(), None, "and nothing wrong is said");
         h.step(&json!({"text": "25 mm"})).unwrap();
         assert_eq!(h.app.params.as_ref().unwrap().new_expr, "25 mm", "Enter went on to the expression");
         h.step(&json!({"key": "Enter"})).unwrap();

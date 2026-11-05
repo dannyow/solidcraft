@@ -27,9 +27,17 @@ pub struct BomPanel {
     pub fields: Vec<String>,
     /// The last refusal.
     pub error: Option<String>,
+    /// The picked row and its fields when Apply was refused: `error` stays only while they still are.
+    refused: Option<(Option<usize>, Vec<String>)>,
 }
 
 impl BomPanel {
+    /// Show why Apply was refused, for as long as the row and its fields stay as they are.
+    fn refuse(&mut self, error: String) {
+        self.refused = Some((self.picked, self.fields.clone()));
+        self.error = Some(error);
+    }
+
     fn params(&self) -> Value {
         json!({"levels": if self.top { "top" } else { "flat" }, "group_by": [if self.by_definition { "definition" } else { "part_number" }],
             "group_children": self.group_children})
@@ -116,16 +124,22 @@ fn apply(app: &mut SolveApp, d: &mut BomPanel, row: &Value) {
         params.insert("component".into(), c.clone());
         let r = app.run("component.metadata.set", Value::Object(params.clone()));
         if let Err(e) = r {
-            d.error = Some(e);
+            d.refuse(e);
             return;
         }
     }
     d.error = None;
+    d.refused = None;
 }
 
 /// Draw the window when it is open. Called once per frame.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut d) = app.bom.take() else { return };
+    // A refused Apply's message is about the row and fields it ran with (#641): once they change, it goes.
+    if d.refused.as_ref().is_some_and(|(row, fields)| (*row, fields) != (d.picked, &d.fields)) {
+        d.error = None;
+        d.refused = None;
+    }
     let t = Tokens::get();
     let bom = d.rows(app);
     let rows: Vec<Value> = bom["rows"].as_array().cloned().unwrap_or_default();
@@ -261,6 +275,41 @@ mod tests {
         assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
         h.frames(2);
         assert!(h.widget("PL-100").is_some(), "the list follows the change");
+    }
+
+    #[test]
+    fn a_refused_apply_keeps_its_message_until_the_row_or_its_fields_change() {
+        let mut h = Harness::new();
+        h.app.run("component.create", json!({"name": "Plate"})).unwrap();
+        h.app.run("solid.box", json!({"length": 40, "width": 20, "height": 3})).unwrap();
+        h.app.run("component.activate", json!({"component": 0})).unwrap();
+        h.app.run("occurrence.copy", json!({"component": "Plate", "translate": [50, 0, 0]})).unwrap();
+        h.step(&json!({"start": "assembly.bom"})).unwrap();
+        h.frames(2);
+        let undo = h.app.session.undo.len();
+        h.step(&json!({"widget": "1"})).unwrap();
+        h.app.bom.as_mut().unwrap().fields[0] = "PL\u{7}".into();
+        h.frames(2);
+        h.step(&json!({"widget": "Apply"})).unwrap();
+        let refused = h.app.bom.as_ref().unwrap().error.clone();
+        assert!(refused.as_deref().is_some_and(|e| e.contains("control character")), "{refused:?}");
+        assert_eq!(h.app.session.undo.len(), undo, "nothing applied");
+        // Correcting the field takes the refusal away before Apply is clicked again.
+        h.app.bom.as_mut().unwrap().fields[0] = "PL-100".into();
+        h.frames(2);
+        assert_eq!(h.app.bom.as_ref().unwrap().error, None, "the message was about the control character, which is gone");
+        // The message is about the row and fields Apply ran with (#641): a change to another
+        // field takes it away too, and the next Apply refuses again.
+        h.app.bom.as_mut().unwrap().fields[0] = "PL\u{7}".into();
+        h.frames(2);
+        h.step(&json!({"widget": "Apply"})).unwrap();
+        assert_eq!(h.app.bom.as_ref().unwrap().error, refused);
+        h.app.bom.as_mut().unwrap().fields[1] = "Plate, 3 mm".into();
+        h.frames(2);
+        assert_eq!(h.app.bom.as_ref().unwrap().error, None, "the fields differ from the refused ones");
+        h.step(&json!({"widget": "Apply"})).unwrap();
+        assert_eq!(h.app.bom.as_ref().unwrap().error, refused, "the same reason again");
+        assert_eq!(h.app.session.undo.len(), undo, "nothing applied");
     }
 
     #[test]

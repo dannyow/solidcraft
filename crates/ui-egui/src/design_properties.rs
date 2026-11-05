@@ -36,13 +36,21 @@ pub struct DesignProperties {
     pub fields: Vec<String>,
     /// The last refusal from `document.metadata.set`.
     pub error: Option<String>,
+    /// What the fields were when OK was refused: `error` stays only while they still are.
+    refused: Option<Vec<String>>,
 }
 
 impl DesignProperties {
     pub fn new(app: &SolveApp) -> Self {
         let m = &app.session.doc.metadata;
         let opened: Vec<String> = keys(Owner::Design).map(|k| m.text(k.name).unwrap_or_default().to_string()).collect();
-        DesignProperties { fields: opened.clone(), opened, error: None }
+        DesignProperties { fields: opened.clone(), opened, error: None, refused: None }
+    }
+
+    /// Show why OK was refused, for as long as the fields stay as they are.
+    fn refuse(&mut self, error: String) {
+        self.refused = Some(self.fields.clone());
+        self.error = Some(error);
     }
 
     /// The fields that differ from what the window opened with, as `document.metadata.set`
@@ -70,7 +78,7 @@ fn apply(app: &mut SolveApp, d: &mut DesignProperties) -> bool {
     match app.run("document.metadata.set", serde_json::json!({ "values": values })) {
         Ok(_) => true,
         Err(e) => {
-            d.error = Some(e);
+            d.refuse(e);
             false
         }
     }
@@ -85,6 +93,11 @@ fn preview(v: &Value) -> String {
 /// Draw the window when it is open. Called once per frame.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut d) = app.design_properties.take() else { return };
+    // A refused OK's message is about the fields it ran with (#641): once they change, it goes.
+    if d.refused.as_ref().is_some_and(|was| *was != d.fields) {
+        d.error = None;
+        d.refused = None;
+    }
     let metadata = app.session.doc.metadata.clone();
     let title = crate::i18n::tr_label("Design Properties");
     let (closed, action) = ui_kit::Window::new(egui::Id::new("sc_design_properties"), "settings", title).fields().show(ctx, true, |ui| {

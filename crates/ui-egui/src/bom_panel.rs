@@ -27,14 +27,15 @@ pub struct BomPanel {
     pub fields: Vec<String>,
     /// The last refusal.
     pub error: Option<String>,
-    /// The picked row and its fields when Apply was refused: `error` stays only while they still are.
-    refused: Option<(Option<usize>, Vec<String>)>,
+    /// The design revision, the picked row and its fields when Apply was refused: `error` stays
+    /// only while they still are.
+    refused: Option<(u64, Option<usize>, Vec<String>)>,
 }
 
 impl BomPanel {
-    /// Show why Apply was refused, for as long as the row and its fields stay as they are.
-    fn refuse(&mut self, error: String) {
-        self.refused = Some((self.picked, self.fields.clone()));
+    /// Show why Apply was refused, for as long as the design, the row and its fields stay as they are.
+    fn refuse(&mut self, revision: u64, error: String) {
+        self.refused = Some((revision, self.picked, self.fields.clone()));
         self.error = Some(error);
     }
 
@@ -124,7 +125,7 @@ fn apply(app: &mut SolveApp, d: &mut BomPanel, row: &Value) {
         params.insert("component".into(), c.clone());
         let r = app.run("component.metadata.set", Value::Object(params.clone()));
         if let Err(e) = r {
-            d.refuse(e);
+            d.refuse(app.session.revision, e);
             return;
         }
     }
@@ -135,8 +136,9 @@ fn apply(app: &mut SolveApp, d: &mut BomPanel, row: &Value) {
 /// Draw the window when it is open. Called once per frame.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut d) = app.bom.take() else { return };
-    // A refused Apply's message is about the row and fields it ran with (#641): once they change, it goes.
-    if d.refused.as_ref().is_some_and(|(row, fields)| (*row, fields) != (d.picked, &d.fields)) {
+    // A refused Apply's message is about the design, row and fields it ran with (#641): once they
+    // change, it goes.
+    if d.refused.as_ref().is_some_and(|(rev, row, fields)| (*rev, *row, fields) != (app.session.revision, d.picked, &d.fields)) {
         d.error = None;
         d.refused = None;
     }
@@ -283,7 +285,13 @@ mod tests {
         h.app.run("component.create", json!({"name": "Plate"})).unwrap();
         h.app.run("solid.box", json!({"length": 40, "width": 20, "height": 3})).unwrap();
         h.app.run("component.activate", json!({"component": 0})).unwrap();
+        h.app.run("component.create", json!({"name": "Bracket"})).unwrap();
+        h.app.run("solid.box", json!({"length": 10, "width": 10, "height": 10})).unwrap();
+        h.app.run("component.activate", json!({"component": 0})).unwrap();
+        // Plate placed three times and Bracket once, so no Qty cell reads "1" before row 1's item
+        // number or "2" before row 2's.
         h.app.run("occurrence.copy", json!({"component": "Plate", "translate": [50, 0, 0]})).unwrap();
+        h.app.run("occurrence.copy", json!({"component": "Plate", "translate": [100, 0, 0]})).unwrap();
         h.step(&json!({"start": "assembly.bom"})).unwrap();
         h.frames(2);
         let undo = h.app.session.undo.len();
@@ -310,6 +318,20 @@ mod tests {
         h.step(&json!({"widget": "Apply"})).unwrap();
         assert_eq!(h.app.bom.as_ref().unwrap().error, refused, "the same reason again");
         assert_eq!(h.app.session.undo.len(), undo, "nothing applied");
+        // Picking another row takes it away: the message was about the Plate row.
+        h.step(&json!({"widget": "2"})).unwrap();
+        assert_eq!(h.app.bom.as_mut().unwrap().picked, Some(1));
+        assert_eq!(h.app.bom.as_ref().unwrap().error, None, "another row is picked");
+        h.step(&json!({"widget": "1"})).unwrap();
+        h.app.bom.as_mut().unwrap().fields[0] = "PL\u{7}".into();
+        h.frames(2);
+        h.step(&json!({"widget": "Apply"})).unwrap();
+        assert_eq!(h.app.bom.as_ref().unwrap().error, refused);
+        // So does a change to the design, whose rows the picked index counts: the message was
+        // about the design Apply ran on.
+        h.app.run("edit.undo", json!({})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.bom.as_ref().unwrap().error, None, "the design changed under the row");
     }
 
     #[test]

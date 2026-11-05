@@ -263,7 +263,7 @@ fn sel_point(app: &SolveApp, d: &Dialog, s: Option<&Sel>) -> Option<Vec3> {
     match s {
         Sel::Edge { body, index, point } => {
             let st = placed_model(app).unwrap_or_default();
-            // The centre is found where the body was modelled; the picked point is where it stands.
+            // The centre is found on the placed body; the picked point is where it was picked.
             Some(crate::dialogs::edge_circle_in(&st, body, *index).map_or(*point, |(c, ..)| carried(d, on_moved(&bodies_of(app, d), s), c)))
         }
         Sel::Vertex { point, .. } | Sel::Face { point, .. } => Some(*point),
@@ -471,7 +471,7 @@ fn step(app: &SolveApp, d: &Dialog) -> Result<Step, String> {
 }
 
 /// An axis line: origin axes and sketch lines, a straight or circular body edge, or a cylinder,
-/// cone or torus face (`dialogs::axis_of`), or a straight edge of a body where it is placed;
+/// cone or torus face (`dialogs::axis_of`), or a straight edge of a body where it was modelled;
 /// on a moved body, where the earlier types' move puts it.
 fn axis_line(app: &SolveApp, d: &Dialog, s: &Sel) -> Option<(Vec3, Vec3)> {
     let (o, a) = modelled_axis(app, s)?;
@@ -486,7 +486,7 @@ fn modelled_axis(app: &SolveApp, s: &Sel) -> Option<(Vec3, Vec3)> {
         return Some(a);
     }
     let Sel::Edge { body, index, .. } = s else { return None };
-    let st = placed_model(app).unwrap_or_else(|| app.session.model.state());
+    let st = app.session.model.state();
     let m = st.body(body)?.mesh();
     let e = m.edges.get(*index)?;
     let (a, b) = (*e.first()?, *e.last()?);

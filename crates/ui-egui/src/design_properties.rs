@@ -571,6 +571,21 @@ mod tests {
         h.frames(2);
         let d = h.app.design_properties.as_ref().expect("still open");
         assert_eq!(d.error, None, "the message was about the control character, which is gone");
+        // The message is about the fields OK ran with, as a dialog's is about its inputs (#641):
+        // a change to another field takes it away too, and the next OK refuses again.
+        h.app.design_properties.as_mut().unwrap().fields[1] = "bad\u{7}".into();
+        h.frames(2);
+        h.step(&json!({"widget": "OK"})).unwrap();
+        let refused = h.app.design_properties.as_ref().expect("still open").error.clone();
+        assert!(refused.as_deref().is_some_and(|e| e.contains("control character")), "{refused:?}");
+        h.app.design_properties.as_mut().unwrap().fields[0] = "ACME".into();
+        h.frames(2);
+        let d = h.app.design_properties.as_ref().expect("still open");
+        assert_eq!(d.error, None, "the fields differ from the refused ones");
+        h.step(&json!({"widget": "OK"})).unwrap();
+        let d = h.app.design_properties.as_ref().expect("still open: the part number is still refused");
+        assert_eq!(d.error, refused, "the same reason again");
+        assert_eq!(h.app.session.undo.len(), undo + 1, "nothing applied");
     }
 
     #[test]

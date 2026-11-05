@@ -26,6 +26,8 @@ const SOURCE_KINDS: [SourceKind; 4] = [SourceKind::UserSupplied, SourceKind::Mea
 pub struct Editor {
     pub(crate) draft: Option<Draft>,
     error: Option<String>,
+    /// The command Save was refused with: `error` stays only while the draft would run it again.
+    refused: Option<(&'static str, Value)>,
     note: Option<String>,
     chosen_material: Option<String>,
     observed_index: Option<usize>,
@@ -60,6 +62,17 @@ impl Editor {
 
     pub fn editing(&self) -> bool {
         self.draft.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// Show why Save was refused, for as long as the draft would run the same command.
+    fn refuse(&mut self, error: String, doc: &Document) {
+        self.refused = self.draft.as_ref().and_then(|d| d.command(doc).ok().flatten());
+        self.error = Some(error);
     }
 
     pub(crate) fn begin(&mut self, doc: &Document, source: Option<&str>, duplicate: bool) {
@@ -500,6 +513,11 @@ pub(crate) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, index: &mut usize, edi
             ui_kit::text(ui, tr("material.editor.unknown_card"), ui_kit::Text::Note("unknown_card"));
         }
         let validation = draft.command(&app.session.doc);
+        // A refused Save's message is about the command it ran (#641): once the draft would run another, it goes.
+        if editor.refused.as_ref().is_some_and(|was| validation.as_ref().ok().and_then(|c| c.as_ref()) != Some(was)) {
+            editor.error = None;
+            editor.refused = None;
+        }
         if let Err(error) = &validation {
             ui_kit::text(ui, error, ui_kit::Text::Report("physical_validation", true));
         }
@@ -517,7 +535,7 @@ pub(crate) fn rows(app: &mut SolveApp, ui: &mut egui::Ui, index: &mut usize, edi
         editor.error = None;
     }
     if save && let Err(error) = editor.save(app, index) {
-        editor.error = Some(error);
+        editor.refuse(error, &app.session.doc);
     }
     if let Some(error) = &editor.error {
         ui_kit::text(ui, error, ui_kit::Text::Report("physical_save_error", true));

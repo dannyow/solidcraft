@@ -126,7 +126,6 @@ impl Painter {
             msaa_samples: 1,
             msaa_supported: vec![1],
             renderer: renderer.clone(),
-            surface_config: egui_wgpu::SurfaceConfig::LOW_LATENCY,
             device_lost: egui_wgpu::DeviceLost::default(),
         };
         // The desktop app's depth (24 bits; 32 where every adapter has float depth with

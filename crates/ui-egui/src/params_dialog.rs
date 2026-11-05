@@ -52,7 +52,8 @@ pub struct ParamsDialog {
     pub new_comment: String,
     /// The last error from an action in the dialog.
     pub error: Option<String>,
-    /// Why adding the add row's draft was refused, kept while the draft and the design stay.
+    /// Why adding the add row's draft was refused, kept while the draft and the design document
+    /// stay.
     new_refused: Option<NewRefused>,
     /// The expression edit to preview: (name, expression).
     pub preview: Option<(String, String)>,
@@ -717,17 +718,27 @@ fn apply_live_checkbox(app: &mut SolveApp, ui: &mut egui::Ui, d: &mut ParamsDial
     }
 }
 
-/// The add row's draft (name, unit, expression, comment) an add was refused with, the design's
-/// revision at the time, and the message. The message is about that draft in that design, as a
-/// dialog's refused OK is about its inputs and the design (#641): once either changes, the
-/// message goes and the expression cell's own live check says what is wrong now, if anything.
+/// The add row's draft (name, unit, expression, comment) an add was refused with, the design
+/// document the refusal was about, and the message. The message is about that draft in that
+/// design, as a dialog's refused OK is about its inputs and the design (#641): once either
+/// changes, the message goes and the expression cell's own live check says what is wrong now, if
+/// anything. A design change replaces the session's document (`Session::execute` keeps the one a
+/// command started from, so an edit lands at a new address, and a refused command puts the old
+/// one back); a selection or display change keeps it, though it moves the session's revision.
 /// The row edits' messages live in `ParamsDialog::error`, apart from this one, so neither can
 /// be taken for the other.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 struct NewRefused {
     draft: (String, usize, String, String),
-    revision: u64,
+    doc: Arc<solidcraft_engine::doc::Document>,
     error: String,
+}
+
+impl NewRefused {
+    /// Whether the add row still holds the draft the refusal was about.
+    fn same_draft(&self, d: &ParamsDialog) -> bool {
+        self.draft.0 == d.new_name && self.draft.1 == d.new_unit && self.draft.2 == d.new_expr && self.draft.3 == d.new_comment
+    }
 }
 
 fn new_draft(d: &ParamsDialog) -> (String, usize, String, String) {
@@ -737,14 +748,15 @@ fn new_draft(d: &ParamsDialog) -> (String, usize, String, String) {
 /// Show why the add was refused, for as long as the draft and the design stay as they are. It
 /// takes the banner from an earlier action's message, as every action's result does.
 fn refuse_add(app: &SolveApp, d: &mut ParamsDialog, error: String) {
-    d.new_refused = Some(NewRefused { draft: new_draft(d), revision: app.session.revision, error });
+    d.new_refused = Some(NewRefused { draft: new_draft(d), doc: app.session.doc.clone(), error });
     d.error = None;
 }
 
-/// A refused add's message gives way once its draft or the design changes.
+/// A refused add's message gives way once its draft changes or the design document is another
+/// one (the design document the refusal was about; a selection or display change keeps it).
 fn forget_refused_add(app: &SolveApp, d: &mut ParamsDialog) {
     if let Some(was) = &d.new_refused
-        && (was.revision != app.session.revision || new_draft(d) != was.draft)
+        && (!Arc::ptr_eq(&was.doc, &app.session.doc) || !was.same_draft(d))
     {
         d.new_refused = None;
     }
@@ -1573,8 +1585,10 @@ mod tests {
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
         assert!(banner(&h).is_some_and(|e| e.contains("already a parameter")), "{:?}", banner(&h));
+        let doc = h.app.session.doc.clone();
         h.app.run("parameters.delete", json!({"name": "width"})).unwrap();
         h.frames(2);
+        assert!(!Arc::ptr_eq(&doc, &h.app.session.doc), "a design change replaces the session's document");
         assert_eq!(banner(&h), None, "the message was about a design that had `width`");
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
@@ -1582,14 +1596,18 @@ mod tests {
     }
 
     /// A row's own refusal with the very same words (renaming `depth` to the taken `width`) is
-    /// not the add row's: correcting the draft leaves it where it is.
+    /// not the add row's: it leaves the add row's refusal in place (the refused command puts the
+    /// document it started from back), and correcting the draft leaves the rename's message
+    /// where it is. A rename's message clears only through a rename that succeeds, which changes
+    /// the design, so the refusal showing again once a row's message is cleared is in
+    /// `the_banner_shows_the_newer_of_a_rows_message_and_the_add_rows_refusal`.
     #[test]
     fn correcting_a_refused_new_parameter_keeps_a_rows_message() {
         let mut h = taken_name_draft();
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
         assert!(banner(&h).is_some_and(|e| e.contains("already a parameter")), "{:?}", banner(&h));
-        let revision = h.app.session.revision;
+        let (doc, revision) = (h.app.session.doc.clone(), h.app.session.revision);
         // Let the clicks that filled the draft age, or egui counts the double-click as a triple.
         h.frames(30);
         h.run(&json!([{"click": {"handle": "param:name:depth"}, "double": true}, {"key": "A", "cmd": true}, {"text": "width"}])).unwrap();
@@ -1600,15 +1618,35 @@ mod tests {
         let d = h.app.params.as_ref().unwrap();
         assert!(d.error.as_deref().is_some_and(|e| e.contains("already a parameter `width`")), "the rename is refused: {:?}", d.error);
         assert_ne!(revision, h.app.session.revision, "a refused rename restores the design and refreshes it, which moves the revision");
-        assert!(d.new_refused.is_none(), "so the draft's own snapshot is already gone, and the rename's message is untouched by that");
+        assert!(Arc::ptr_eq(&doc, &h.app.session.doc), "but the restore puts the document the rename started from back");
+        assert!(d.new_refused.is_some(), "so the draft's own refusal stays, under the rename's message");
         assert_eq!(h.app.session.doc.param("depth").unwrap().expr, "5 mm");
         h.step(&json!({"text": "2"})).unwrap();
         h.frames(2);
         let d = h.app.params.as_ref().unwrap();
         assert_eq!(d.new_name, "width2");
-        assert!(d.new_refused.is_none(), "the draft's own refusal is gone");
+        assert!(d.new_refused.is_none(), "the draft's own refusal goes with the draft");
         assert!(d.error.as_deref().is_some_and(|e| e.contains("already a parameter `width`")), "the rename's message stays: {:?}", d.error);
-        assert!(d.banner().is_some());
+        assert_eq!(d.banner(), d.error.as_deref(), "and is what the banner shows");
+    }
+
+    /// A click on a body in the viewport selects it (`select.set`), which moves the session's
+    /// revision but not the design: the message is about the draft in the design, so it stays.
+    #[test]
+    fn selecting_a_body_keeps_a_refused_new_parameters_message() {
+        let mut h = taken_name_draft();
+        h.app.run("solid.box", json!({"length": 10, "width": 20, "height": 30})).unwrap();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"));
+        let (doc, revision) = (h.app.session.doc.clone(), h.app.session.revision);
+        h.app.run("select.set", json!({"items": [solidcraft_engine::Sel::Body { name: "Body1".into() }]})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.session.selection.len(), 1, "the body is selected");
+        assert_ne!(revision, h.app.session.revision, "a selection moves the revision");
+        assert!(Arc::ptr_eq(&doc, &h.app.session.doc), "and leaves the document alone");
+        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"), "so the message stays");
+        assert!(h.app.params.as_ref().unwrap().new_refused.is_some());
     }
 
     /// A unit or comment edit changes the draft the message was about, so the message goes with
@@ -1641,26 +1679,48 @@ mod tests {
     }
 
     /// With a row's message and the add row's refusal both alive, the banner shows the newer one.
-    /// A row's expression that fails its check runs no command, so the design stays and the add
-    /// row's refusal stays with it, under the row's message; a refusal after that takes the
-    /// banner back, as any action's result did.
+    /// A row's expression that fails its check runs no design-changing command, so the document
+    /// stays and the add row's refusal stays with it, under the row's message; once the row is
+    /// corrected, the refusal shows again with no new Enter; and a refusal after a row's message
+    /// takes the banner back, as any action's result did. The edits are held (#9279): in the live
+    /// mode a row's message clears only through a `parameters.change` that succeeds, which changes
+    /// the design and drops the refusal too. The draft's expression is unfinished, so leaving the
+    /// add row attempts nothing (a valid draft is attempted on every click outside the row).
     #[test]
     fn the_banner_shows_the_newer_of_a_rows_message_and_the_add_rows_refusal() {
-        let mut h = taken_name_draft();
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.preferences.parameters_apply_live = false;
+        h.app.run("parameters.add", json!({"name": "depth", "expression": "5 mm"})).unwrap();
+        h.step(&json!({"start": "parameters.change"})).unwrap();
+        h.step(&json!({"click": {"handle": "dialog:table:user:add"}})).unwrap();
+        h.step(&json!({"text": "height"})).unwrap();
+        h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
+        h.step(&json!({"text": "10 +"})).unwrap();
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
-        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"));
-        // The click into `depth` leaves the add row, which attempts the draft once more and is
-        // refused with the same words; then the row's expression is made to name nothing.
+        let refusal = banner(&h).expect("an unfinished expression is refused");
+        assert!(h.app.session.doc.param("height").is_none(), "nothing was added");
+        let doc = h.app.session.doc.clone();
         h.run(&json!([{"click": {"handle": "param:depth"}}, {"key": "A", "cmd": true}, {"text": "missing + 1 mm"}, {"key": "Enter"}])).unwrap();
         h.frames(2);
         assert_eq!(banner(&h).as_deref(), Some("unknown parameter `missing`"), "the row's message is the newer one");
-        assert_eq!(h.app.session.doc.param("depth").unwrap().expr, "5 mm");
+        assert!(h.app.params.as_ref().unwrap().new_refused.is_some(), "the add row's refusal is alive under it");
+        assert!(Arc::ptr_eq(&doc, &h.app.session.doc), "a failed check leaves the document alone");
+        h.run(&json!([{"click": {"handle": "param:depth"}}, {"key": "A", "cmd": true}, {"text": "6 mm"}, {"key": "Enter"}])).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some(refusal.as_str()), "the correction clears the row's message and the refusal shows again, no Enter");
+        assert_eq!(h.app.params.as_ref().unwrap().editing.get("depth").map(String::as_str), Some("6 mm"), "the held edit waits for Apply");
+        assert!(Arc::ptr_eq(&doc, &h.app.session.doc), "and the design is as it was");
+        h.run(&json!([{"click": {"handle": "param:depth"}}, {"key": "A", "cmd": true}, {"text": "missing + 1 mm"}, {"key": "Enter"}])).unwrap();
+        h.frames(2);
+        assert_eq!(banner(&h).as_deref(), Some("unknown parameter `missing`"), "the row's message is the newer one again");
         h.step(&json!({"click": {"handle": "param:new:expression"}})).unwrap();
         h.step(&json!({"key": "Enter"})).unwrap();
         h.frames(2);
-        assert_eq!(banner(&h).as_deref(), Some("there is already a parameter `width`"), "the add row's refusal is the newer one");
+        assert_eq!(banner(&h).as_deref(), Some(refusal.as_str()), "the add row's refusal is the newer one");
         assert_eq!(h.app.params.as_ref().unwrap().editing.get("depth").map(String::as_str), Some("missing + 1 mm"), "the row's edit is kept");
+        assert_eq!(h.app.session.doc.param("depth").unwrap().expr, "5 mm");
     }
 
     /// #8563: sorting orders each section, and each model group, by itself.

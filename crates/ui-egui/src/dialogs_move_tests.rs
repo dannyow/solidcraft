@@ -85,6 +85,164 @@ fn editing_a_move_in_a_turned_component_keeps_world_distances() {
     assert!((bounds(&h).min - before.min - Vec3::new(0.0, -8.0, 0.0)).len() < 1e-6, "edited distances follow world axes too");
 }
 
+/// A body of a placed component: the triad and Rotate's ring sit where its placement puts the
+/// body, and a second placement's body (named after its occurrence) has a triad at all.
+#[test]
+fn move_triad_and_ring_sit_on_the_placed_body() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
+    h.app.run("occurrence.copy", json!({"component": "Part", "translate": [0, 40, 0]})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    // An axis away from the origin and along no world axis: the ring's x, y and z all follow the centre.
+    let (o, a) = (Vec3::new(5.0, 7.0, 9.0), Vec3::new(1.0, 1.0, 1.0).normalized().unwrap());
+    h.app.run("construct.axis.two_points", json!({"a": {"point": [5, 7, 9]}, "b": {"point": [6, 8, 10]}, "name": "TurnAxis"})).unwrap();
+    let world = crate::open_meshing::session_world(&h.app.session);
+    let mut names: Vec<String> = world.bodies.iter().map(|b| b.name.clone()).collect();
+    names.sort();
+    assert!(names.len() == 2 && names[0] == "Body1" && names[1].starts_with("Body1 ("), "{names:?}");
+    h.app.start("solid.move");
+    for name in &names {
+        let placed = world.body(name).unwrap().mesh().bounds();
+        let centre = (placed.min + placed.max) * 0.5;
+        {
+            let d = h.app.dialog.as_mut().unwrap();
+            d.kind = kind(TRANSLATE, &h.app.session.doc);
+            d.inputs = inputs(TRANSLATE);
+            d.inputs[0].items = vec![Sel::Body { name: name.clone() }];
+        }
+        let got = triad(&h.app, h.app.dialog.as_ref().unwrap()).map(|t| t.center);
+        assert!(got.is_some_and(|c| c.dist(centre) < 1e-6), "{name}: the triad sits at the placed body {centre:?}, got {got:?}");
+        {
+            let d = h.app.dialog.as_mut().unwrap();
+            d.kind = kind(ROTATE, &h.app.session.doc);
+            d.inputs = inputs(ROTATE);
+            d.inputs[0].items = vec![Sel::Body { name: name.clone() }];
+            d.inputs[1].items = vec![Sel::Axis { name: "TurnAxis".into() }];
+        }
+        let ring = rotation_axis(&h.app, h.app.dialog.as_ref().unwrap()).map(|(o, _)| o);
+        let foot = o + a * (centre - o).dot(a);
+        assert!(ring.is_some_and(|r| r.dist(foot) < 1e-6), "{name}: the ring is level with the placed body, at {foot:?} on the axis, got {ring:?}");
+    }
+}
+
+/// Editing a move of a body in a placed component: the triad sits where the body is, placed,
+/// before that move (plus the move's own distances), not where the component was modelled.
+/// The edit is opened as the timeline opens it, which rolls the design back to before the move.
+#[test]
+fn editing_a_move_puts_the_triad_on_the_placed_body() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let bounds = |h: &crate::scenario::Harness| crate::open_meshing::session_world(&h.app.session).body("Body1").unwrap().mesh().bounds();
+    let before = bounds(&h);
+    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
+    h.app.edit_feature(moved);
+    h.frames(2);
+    assert_eq!(h.app.session.doc.marker, h.app.session.doc.feature_index(moved), "the premise: the editor rolled the design back to before the move");
+    let now = bounds(&h);
+    assert!(now.min.dist(before.min) < 1e-9 && now.max.dist(before.max) < 1e-9, "the premise: the session's placed model is the one before the move");
+    let d = h.app.dialog.as_ref().expect("the move's dialog is open");
+    assert_eq!(d.editing.map(|(id, _)| id), Some(moved), "the premise: the dialog edits the move");
+    let expected = (before.min + before.max) * 0.5 + Vec3::new(0.0, -4.0, 0.0);
+    let got = triad(&h.app, d).map(|t| t.center);
+    assert!(got.is_some_and(|c| c.dist(expected) < 1e-6), "the triad sits at the placed body before the edited move, {expected:?}, got {got:?}");
+}
+
+/// A model that cannot be placed (the viewport says why) still moves its bodies. Editing a move
+/// in it: the triad and the bodies' centre come from the unplaced model before the move, as they
+/// did before the dialog read the placed model, and an edge pivot stays at its picked point, as
+/// the placed model is empty.
+#[test]
+fn a_model_that_cannot_be_placed_keeps_the_move_usable() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("sketch.create", json!({"plane": "XY", "name": "Outline"})).unwrap();
+    h.app.run("solid.cylinder", json!({"base": [0, 0, 0], "axis": [0, 0, 1], "radius": 10, "height": 20})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let before = h.app.session.model.state().body("Body1").unwrap().mesh().bounds();
+    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
+    h.app.edit_feature(moved);
+    h.frames(2);
+    assert_eq!(h.app.session.doc.marker, h.app.session.doc.feature_index(moved), "the premise: the editor rolled the design back to before the move");
+    // A placement that folds y onto x: its sketch plane has no second axis, so placing fails.
+    let mut doc = (*h.app.session.doc).clone();
+    doc.occurrences[0].transform[1] = [1.0, 0.0, 0.0, 0.0];
+    h.app.session.doc = std::sync::Arc::new(doc);
+    assert!(h.app.session.world_state().is_err(), "the premise: the model cannot be placed, as the dialog places it");
+    let unplaced = h.app.session.model.state();
+    let bounds = unplaced.body("Body1").unwrap().mesh().bounds();
+    assert!(bounds.min.dist(before.min) < 1e-9 && bounds.max.dist(before.max) < 1e-9, "the premise: the session's model is the one before the move");
+    let centre = (bounds.min + bounds.max) * 0.5;
+    let mut d = h.app.dialog.clone().expect("the move's dialog is open");
+    assert_eq!(d.editing.map(|(id, _)| id), Some(moved), "the premise: the dialog edits the move");
+    let got = pivot(&h.app, &d);
+    assert!(got.is_some_and(|c| c.dist(centre) < 1e-6), "the triad's pivot is the unplaced body's centre before the move, {centre:?}, got {got:?}");
+    assert!(triad(&h.app, &d).is_some(), "the triad shows");
+    if let Kind::Move { rx, .. } = &mut d.kind {
+        *rx = "30 deg".into();
+    }
+    let p = params(&h.app, &d);
+    assert!(p.is_ok(), "a turn about the bodies' centre is still made: {p:?}");
+    // A round edge of the cylinder, picked somewhere: with no placed body to find its circle on,
+    // the pivot is the picked point.
+    let edges = unplaced.body("Body1").unwrap().mesh().edges.len();
+    let round = (0..edges).find(|i| crate::dialogs::edge_circle_in(&unplaced, "Body1", *i).is_some());
+    assert!(round.is_some(), "the premise: the cylinder has a round edge");
+    let picked = Vec3::new(1.0, 2.0, 3.0);
+    d.inputs[1].items = vec![Sel::Edge { body: "Body1".into(), index: round.unwrap(), point: picked }];
+    let pivot = sel_point(&h.app, &d, d.inputs[1].items.first());
+    assert!(pivot.is_some_and(|p| p.dist(picked) < 1e-9), "an edge pivot stays at its picked point, got {pivot:?}");
+}
+
+/// Editing a move of a body in a placed component as Rotate about one of the body's edges: the
+/// ring turns about the edge where the body is before the move, placed (where the ring's centre
+/// is read), not about the edge where the move leaves the body.
+#[test]
+fn editing_a_move_puts_the_ring_on_an_edge_of_the_placed_body_before_the_move() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.run("component.create", json!({"name": "Part", "grounded": false})).unwrap();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("occurrence.move", json!({"occurrence": "Part:1", "axis": [1, 0, 0], "angle": "90 deg", "translate": [50, 10, 20]})).unwrap();
+    h.app.run("component.activate", json!({"component": "root"})).unwrap();
+    let world = crate::open_meshing::session_world(&h.app.session);
+    let moved = h.app.run("solid.move", json!({"bodies": ["Body1"], "translate": [0, -4, 0]})).unwrap()["feature"].as_u64().unwrap();
+    let after = crate::open_meshing::session_world(&h.app.session);
+    let chord = |st: &solidcraft_engine::doc::ModelState, i: usize| -> Option<(Vec3, Vec3)> {
+        let e = st.body("Body1")?.mesh().edges.get(i)?.clone();
+        let (a, z) = (*e.first()?, *e.last()?);
+        Some((a, (z - a).normalized()?))
+    };
+    // A straight edge the move takes off its line (one along the move's own direction stays on it).
+    let edges = world.body("Body1").unwrap().mesh().edges.len();
+    let edge = (0..edges).find_map(|i| {
+        let (a, dir) = chord(&world, i)?;
+        let (a2, dir2) = chord(&after, i)?;
+        (dir2.cross(dir).len() > 1e-3 || (a2 - a).cross(dir).len() > 1e-3).then_some((i, a, dir))
+    });
+    let (index, a, dir) = edge.expect("the premise: an edge of the box leaves its line under the move");
+    h.app.edit_feature(moved);
+    h.frames(2);
+    assert_eq!(h.app.session.doc.marker, h.app.session.doc.feature_index(moved), "the premise: the editor rolled the design back to before the move");
+    let (was, now) =
+        (world.body("Body1").unwrap().mesh().bounds(), crate::open_meshing::session_world(&h.app.session).body("Body1").unwrap().mesh().bounds());
+    assert!(now.min.dist(was.min) < 1e-9 && now.max.dist(was.max) < 1e-9, "the premise: the session's placed model is the one before the move");
+    let mut d = h.app.dialog.clone().expect("the move's dialog is open");
+    assert_eq!(d.editing.map(|(id, _)| id), Some(moved), "the premise: the dialog edits the move");
+    d.kind = kind(ROTATE, &h.app.session.doc);
+    d.inputs = inputs(ROTATE);
+    d.inputs[0].items = vec![Sel::Body { name: "Body1".into() }];
+    d.inputs[1].items = vec![Sel::Edge { body: "Body1".into(), index, point: a }];
+    let ring = rotation_axis(&h.app, &d);
+    assert!(
+        ring.is_some_and(|(o, axis)| axis.cross(dir).len() < 1e-9 && (o - a).cross(dir).len() < 1e-6),
+        "the ring turns about the edge where the body is before the move, through {a:?} along {dir:?}, got {ring:?}"
+    );
+}
+
 /// #6822: Rotate must offer a draggable handle after the body and axis are picked.
 #[test]
 fn rotate_handle_updates_the_angle_without_moving_the_camera() {

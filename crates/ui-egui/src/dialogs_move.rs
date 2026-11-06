@@ -256,19 +256,14 @@ pub fn rows(ui: &mut egui::Ui, k: &mut Kind) -> bool {
 
 /// Where a point pick is: a round edge stands for its centre, where the model is before this
 /// move, in the world (a body of a placed component where its occurrence puts it, as it was
-/// picked); any other pick is where it was picked.
+/// picked); any other pick is where it was picked, as is a round edge of a model that cannot
+/// be placed.
 fn sel_point(app: &SolveApp, d: &Dialog, s: Option<&Sel>) -> Option<Vec3> {
     let s = s?;
     match s {
         Sel::Edge { body, index, point } => {
-            // As every pick reads the placed model: one that cannot be placed has no bodies here.
-            let st = match d.editing {
-                Some((id, _)) => std::sync::Arc::new(
-                    solidcraft_engine::doc::world_state(&app.session.doc, &app.session.model.state_before(id)).unwrap_or_default(),
-                ),
-                None => crate::open_meshing::session_world(&app.session),
-            };
-            // The centre is found where the body was modelled; the picked point is where it stands.
+            let st = placed_model(app).unwrap_or_default();
+            // The centre is found on the placed body; the picked point is where it was picked.
             Some(crate::dialogs::edge_circle_in(&st, body, *index).map_or(*point, |(c, ..)| carried(d, on_moved(&bodies_of(app, d), s), c)))
         }
         Sel::Vertex { point, .. } | Sel::Face { point, .. } => Some(*point),
@@ -280,12 +275,19 @@ fn items(d: &Dialog, i: usize) -> &[Sel] {
     crate::selection::items(&d.inputs, i)
 }
 
+/// The model this move looks at, placed in the world as every pick reads it (a body of a placed
+/// component where its occurrence puts it, a second placement's body under its own name). While
+/// a move is edited this is already the model before it: the editor rolls the timeline back to
+/// just before the feature, so the session's model stops there and nothing more is needed.
+/// `None` when the model cannot be placed; each caller then falls back on its own (the picked
+/// point, the bodies where they were modelled).
+fn placed_model(app: &SolveApp) -> Option<std::sync::Arc<solidcraft_engine::doc::ModelState>> {
+    app.session.world_state().ok()
+}
+
 /// The centre of the picked bodies where they are before this move (after the earlier types').
 fn bodies_center(app: &SolveApp, d: &Dialog) -> Option<Vec3> {
-    let st = match d.editing {
-        Some((id, _)) => app.session.model.state_before(id),
-        None => app.session.model.state(),
-    };
+    let st = placed_model(app).unwrap_or_else(|| app.session.model.state());
     let mut bb: Option<(Vec3, Vec3)> = None;
     for n in bodies_of(app, d) {
         let Some(b) = st.body(&n) else { continue };

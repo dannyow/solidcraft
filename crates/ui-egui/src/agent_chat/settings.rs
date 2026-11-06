@@ -50,8 +50,9 @@ pub struct AddState {
     list_again: bool,
 }
 
-/// The fields `add_agent` reads.
-type AddInputs = (AddKind, Protocol, usize, String, String, String, String, String, u64, String);
+/// What the Add dialog's fields say, as far as a refusal can be about them: of the key only
+/// whether one is typed (`add_agent` reads nothing else of it, and no second copy is kept).
+type AddInputs = (AddKind, Protocol, usize, String, String, String, String, bool, u64, String);
 
 impl AddState {
     fn inputs(&self) -> AddInputs {
@@ -63,7 +64,7 @@ impl AddState {
             self.command.clone(),
             self.base_url.clone(),
             self.model.clone(),
-            self.key.clone(),
+            !self.key.trim().is_empty(),
             self.request_timeout_s,
             self.reasoning_effort.clone(),
         )
@@ -1848,12 +1849,30 @@ mod card_tests {
         h.step(&json!({"click":{"handle":"ai_add:add"}})).unwrap();
         let refused = h.app.agent_chat.settings.add.as_ref().unwrap().error.clone();
         assert!(refused.is_some(), "an empty command is refused");
+        h.frames(3);
+        assert_eq!(h.app.agent_chat.settings.add.as_ref().unwrap().error, refused, "the message stays while the fields do");
         // Typing the command takes the refusal away before Add is clicked again.
         h.app.agent_chat.settings.add.as_mut().unwrap().command = "solidcraft-fixture-agent --acp".into();
         h.frames(3);
         assert_eq!(h.app.agent_chat.settings.add.as_ref().unwrap().error, None, "the message was about the empty command, which is gone");
         // The message is about the fields Add ran with (#641): the same fields again are refused again.
         h.app.agent_chat.settings.add.as_mut().unwrap().command.clear();
+        h.frames(3);
+        h.step(&json!({"click":{"handle":"ai_add:add"}})).unwrap();
+        assert_eq!(h.app.agent_chat.settings.add.as_ref().unwrap().error, refused, "the same reason again");
+        assert!(h.app.agent_chat.settings.add.is_some(), "nothing added");
+        // An endpoint without a model: the same for its fields.
+        h.step(&json!({"click":{"handle":"ai_add:ui.ai_add_endpoint"}})).unwrap();
+        h.step(&json!({"click":{"handle":"ai_add:protocol:anthropic"}})).unwrap();
+        h.step(&json!({"click":{"handle":"ai_add:add"}})).unwrap();
+        let refused = h.app.agent_chat.settings.add.as_ref().unwrap().error.clone();
+        assert!(refused.is_some(), "an endpoint without a model is refused");
+        h.frames(3);
+        assert_eq!(h.app.agent_chat.settings.add.as_ref().unwrap().error, refused);
+        h.app.agent_chat.settings.add.as_mut().unwrap().model = "claude-opus-5-5".into();
+        h.frames(3);
+        assert_eq!(h.app.agent_chat.settings.add.as_ref().unwrap().error, None, "the message was about the missing model, which is typed");
+        h.app.agent_chat.settings.add.as_mut().unwrap().model.clear();
         h.frames(3);
         h.step(&json!({"click":{"handle":"ai_add:add"}})).unwrap();
         assert_eq!(h.app.agent_chat.settings.add.as_ref().unwrap().error, refused, "the same reason again");

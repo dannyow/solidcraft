@@ -2026,3 +2026,16 @@ fn absolute_move_refuses_relative_keys_and_keeps_capture_and_grounding() {
     let r = run(&mut s, "occurrence.move", json!({"occurrence": occ, "to": {"position": [9,0,0]}, "move_grounded": true}));
     near(&r["transform"][3][0], 9.0);
 }
+
+/// A component's name is 1…128 characters, as the refusal says, not 128 bytes of its UTF-8: a
+/// hundred `ł` (200 bytes) is taken, 129 characters are not.
+#[test]
+fn component_names_count_characters_not_bytes() {
+    let mut s = Session::default();
+    let (component, _) = created(&mut s, "A");
+    let long = "ł".repeat(100);
+    run(&mut s, "component.rename", json!({"component": component, "name": long}));
+    assert_eq!(s.doc.find_component(&long), Some(component));
+    let error = s.execute("component.rename", &json!({"component": component, "name": "ł".repeat(129)})).unwrap_err().to_string();
+    assert!(error.contains("1…128 characters"), "{error}");
+}

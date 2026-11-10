@@ -1193,9 +1193,12 @@ pub fn tabs(app: &mut SolveApp, ui: &mut egui::Ui, r: Rect, x0: f32, x1: f32) {
         }
     }
     match (kept, rename) {
-        (Some(true), Some(done)) => {
-            if names.get(selected).is_some_and(|shown| done.text.trim() != shown.trim()) {
-                let _ = crate::context_menu::commit_rename(app, &done);
+        (Some(true), Some(mut done)) => {
+            // A refused name keeps the field open, focused with the name selected; the status line
+            // says why.
+            if names.get(selected).is_some_and(|shown| done.text.trim() != shown.trim()) && crate::context_menu::commit_rename(app, &done).is_err() {
+                done.focused = false;
+                app.menu.rename = Some(done);
             }
         }
         (Some(false), _) | (_, None) => {}

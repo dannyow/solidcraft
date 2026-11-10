@@ -1357,13 +1357,10 @@ fn dispatch(app: &mut SolveApp, ctx: &egui::Context, method: &str, p: &Value) ->
             let Some(key) = s("item") else { return err("missing `item` (id or label)") };
             wrap(crate::context_menu::pick(app, key))
         }
-        "ui.rename" => {
-            if crate::context_menu::finish_rename(app, s("text"), p.get("commit").and_then(Value::as_bool).unwrap_or(true)) {
-                ok(json!({"done": true}))
-            } else {
-                err("no rename in progress")
-            }
-        }
+        "ui.rename" => match crate::context_menu::finish_rename(app, s("text"), p.get("commit").and_then(Value::as_bool).unwrap_or(true)) {
+            Ok(()) => ok(json!({"done": true})),
+            Err(e) => err(e),
+        },
         "ui.window" => match crate::titlebar::window_action(app, ctx, s("action").unwrap_or("")) {
             Ok(()) => ok(json!({"custom_titlebar": app.custom_titlebar, "maximized": ctx.input(|i| i.viewport().maximized)})),
             Err(e) => err(e),

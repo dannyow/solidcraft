@@ -299,7 +299,7 @@ fn body_menu_isolates_renames_locks_and_deletes() {
     assert!(!app.session.visibility.hidden_bodies.contains(&b));
     // Rename through the rename box.
     context_menu::run_item(&mut app, &find(&items, "Rename"), pos2(10.0, 10.0));
-    assert!(context_menu::finish_rename(&mut app, Some("Base"), true));
+    context_menu::finish_rename(&mut app, Some("Base"), true).unwrap();
     assert!(app.session.model.state().body("Base").is_some());
     // Locked bodies can't be moved or deleted.
     let t = Target::Body { name: "Base".into() };
@@ -697,7 +697,7 @@ fn folder_and_group_menus_make_rename_and_drop_groups() {
     assert!(context_menu::items(&app, &Target::Body { name: names[0].clone() }).iter().any(|i| i.label == "Group Selected"));
     let t = Target::Group { id: g.id, scope: "c0".into() };
     act(&mut app, &t, "Rename");
-    assert!(context_menu::finish_rename(&mut app, Some("Parts"), true));
+    context_menu::finish_rename(&mut app, Some("Parts"), true).unwrap();
     assert_eq!(app.session.doc.browser_groups[0].name, "Parts");
     // Show/Hide hides the group itself: its bodies keep their own state but aren't drawn.
     act(&mut app, &t, "Show/Hide");
@@ -860,11 +860,11 @@ fn browser_feature_menu_renames_its_target_and_supports_undo() {
     let undo = app.session.undo.len();
     act(&mut app, &Target::Feature { id: target }, "Rename");
     assert_eq!(app.menu.rename.as_ref().unwrap().text, target_name);
-    assert!(context_menu::finish_rename(&mut app, Some("Cancelled"), false));
+    context_menu::finish_rename(&mut app, Some("Cancelled"), false).unwrap();
     assert_eq!(app.session.doc.to_json(), saved);
     assert_eq!(app.session.undo.len(), undo);
     act(&mut app, &Target::Feature { id: target }, "Rename");
-    assert!(context_menu::finish_rename(&mut app, Some("Renamed feature"), true));
+    context_menu::finish_rename(&mut app, Some("Renamed feature"), true).unwrap();
     assert!(app.menu.rename.is_none());
     assert_eq!(app.session.doc.feature(target).unwrap().name, "Renamed feature");
     assert_eq!(app.session.doc.feature(keep).unwrap().name, keep_name);
@@ -989,7 +989,7 @@ fn canvas_menu_hides_renames_calibrates_and_deletes() {
     act(&mut app, &t, "Show/Hide");
     assert!(!app.session.doc.canvases[0].visible);
     act(&mut app, &t, "Rename");
-    assert!(context_menu::finish_rename(&mut app, Some("Photo"), true));
+    context_menu::finish_rename(&mut app, Some("Photo"), true).unwrap();
     assert_eq!(app.session.doc.canvases[0].name, "Photo");
     act(&mut app, &t, "Calibrate");
     let p = app.tree.canvas_panel.clone().unwrap();
@@ -1191,7 +1191,7 @@ fn named_views_save_restore_rename_and_delete() {
     act(&mut app, &t, "Restore");
     assert_eq!(app.cam_anim.map(|a| a.to), Some(saved), "animates back to the saved camera");
     act(&mut app, &t, "Rename");
-    assert!(context_menu::finish_rename(&mut app, Some("Front detail"), true));
+    context_menu::finish_rename(&mut app, Some("Front detail"), true).unwrap();
     let t = Target::NamedView { name: "Front detail".into() };
     act(&mut app, &t, "Delete");
     assert!(app.session.doc.named_views.is_empty());
@@ -1294,7 +1294,7 @@ fn f2_renames_the_selected_item() {
     let b = body(&app);
     app.run("select.set", json!({"items": [{"type": "body", "name": b}]})).unwrap();
     assert!(context_menu::rename_selection(&mut app, pos2(0.0, 0.0)));
-    assert!(context_menu::finish_rename(&mut app, Some("Base"), true));
+    context_menu::finish_rename(&mut app, Some("Base"), true).unwrap();
     assert!(app.session.model.state().body("Base").is_some());
     app.run("select.clear", json!({})).unwrap();
     assert!(!context_menu::rename_selection(&mut app, pos2(0.0, 0.0)), "nothing selected");
@@ -1407,7 +1407,7 @@ fn double_click_on_a_body_row_renames_it_in_the_row() {
     let at = crate::scenario::handle_at("row:Block").expect("the row is still there");
     h.call("ui.click", json!({"x": at.x, "y": at.y, "double": true}));
     h.frames(3);
-    assert!(context_menu::finish_rename(&mut h.app, Some("Base"), true));
+    context_menu::finish_rename(&mut h.app, Some("Base"), true).unwrap();
     assert!(h.app.session.model.state().body("Base").is_some());
 }
 
@@ -1515,7 +1515,7 @@ fn construction_plane_row_opens_its_menu() {
     act(&mut h.app, &t, "Show/Hide");
     assert!(!h.app.session.visibility.hidden_origin.contains(&"Cut".to_string()));
     act(&mut h.app, &t, "Rename");
-    assert!(context_menu::finish_rename(&mut h.app, Some("Section"), true));
+    context_menu::finish_rename(&mut h.app, Some("Section"), true).unwrap();
     assert!(h.app.session.doc.find_feature("Section").is_some_and(|f| f.id == id));
     act(&mut h.app, &t, "Find in Timeline");
     assert_eq!(h.app.session.selection, vec![solidcraft_engine::Sel::Feature { id }]);

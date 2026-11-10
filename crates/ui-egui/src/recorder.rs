@@ -109,7 +109,7 @@ impl Painter {
         let instance = wgpu::Instance::new(desc);
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).map_err(|e| format!("no GPU adapter: {e}"))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            required_features: solidcraft_gpu::depth_features(&adapter),
+            required_features: solidcraft_viewport_gpu::depth_features(&adapter),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
             ..Default::default()
         }))
@@ -130,7 +130,7 @@ impl Painter {
         };
         // The desktop app's depth (24 bits; 32 where every adapter has float depth with
         // stencil), stencil and MSAA request (4x).
-        let depth = if solidcraft_gpu::depth_features(&rs.adapter).contains(wgpu::Features::DEPTH32FLOAT_STENCIL8) { 32 } else { 24 };
+        let depth = if solidcraft_viewport_gpu::depth_features(&rs.adapter).contains(wgpu::Features::DEPTH32FLOAT_STENCIL8) { 32 } else { 24 };
         app.set_wgpu_split(&rs, depth, 8, 4);
         Ok(Painter { device, queue, renderer, target: None })
     }

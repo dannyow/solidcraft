@@ -1750,6 +1750,26 @@ mod tests {
         assert_eq!(h.app.session.doc.name, "x".repeat(MAX_DESIGN_NAME), "the command takes it, cut to 128 characters");
     }
 
+    /// The field takes 128 characters but the command takes 128 bytes: a refused name keeps the
+    /// field open with the reason, as the browser's inline editor does (#10654).
+    #[test]
+    fn a_refused_name_keeps_the_field_open_and_says_why() {
+        let mut h = design_open();
+        let before = h.app.session.doc.name.clone();
+        double_click_tab(&mut h, 0);
+        h.step(&json!({"text": "ł".repeat(100)})).unwrap();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert!(renaming_tab(&h.app) && crate::scenario::rect_of("tab:rename").is_some(), "the field stays open after a refused rename");
+        let (text, _, error) = h.app.status.clone().expect("the refusal is shown");
+        assert!(error && text.contains("128 characters"), "{text}");
+        assert_eq!(h.app.session.doc.name, before);
+        h.step(&json!({"text": "Bracket"})).unwrap();
+        h.step(&json!({"key": "Enter"})).unwrap();
+        h.frames(2);
+        assert_eq!(h.app.session.doc.name, "Bracket", "the name can be corrected at once");
+    }
+
     #[test]
     fn with_the_preference_off_a_double_click_does_not_rename() {
         let mut h = design_open();

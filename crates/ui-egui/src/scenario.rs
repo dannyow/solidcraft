@@ -14,6 +14,8 @@
 //! - `{"queued": "engine.execute", "params": {…}, "min_frames"?: n, "max_frames"?: n}`: a request sent the way an
 //!   agent's arrive (through the app's request queue, answered between frames, so the agent
 //!   cursor can act it out first); fails if the answer came in fewer than `min_frames` frames
+//! - `"wait": false` on a `queued` step only sends it (later steps run while it waits in line);
+//!   `{"answered": true}` runs frames until all of those have their answer
 //! - `{"call": "ui.view", "params": {…}}`: any other control request (`fail: true` expects an
 //!   error)
 //! - `{"panel_fixture": {"enabled": true, "preset": "docks"}}`: explicit synthetic content
@@ -99,6 +101,8 @@ pub struct Harness {
     next_file: Rc<RefCell<Option<String>>>,
     /// The app's request queue, opened by the first queued request.
     queue: Option<std::sync::mpsc::Sender<ControlRequest>>,
+    /// Answers of queued requests sent with `"wait": false`, collected by an `answered` step.
+    pending: Vec<std::sync::mpsc::Receiver<Value>>,
     time: f64,
     pub(crate) size: egui::Vec2,
     /// The camera as the last `camera` step left it.
@@ -145,6 +149,7 @@ impl Harness {
             dir: scratch_dir(),
             next_file: Rc::new(RefCell::new(None)),
             queue: None,
+            pending: Vec::new(),
             time: 0.0,
             size: egui::vec2(1600.0, 1000.0),
             cam_mark: None,
@@ -501,6 +506,30 @@ impl Harness {
                     json!({"x0": x0, "y0": y0, "x1": x1, "y1": y1, "steps": steps, "shift": flag("shift"), "ctrl": flag("ctrl"), "alt": flag("alt")});
                 p["via"] = Value::Array(via);
                 self.call("ui.drag", p)
+            } else if let Some(m) = s.get("queued").and_then(Value::as_str)
+                && s.get("wait") == Some(&Value::Bool(false))
+            {
+                // Send only: later steps run while it waits in the app's queue.
+                let tx = self.queue.get_or_insert_with(|| {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.app.control_rx = Some(rx);
+                    tx
+                });
+                let (req, rx) = ControlRequest::new(m, s.get("params").cloned().unwrap_or(json!({})));
+                tx.send(req).map_err(|_| "the request queue is closed".to_string())?;
+                self.pending.push(rx);
+                json!({"ok": true})
+            } else if s.get("answered").is_some() {
+                // Frames until every request sent with `"wait": false` has its answer.
+                for _ in 0..3000 {
+                    self.pending.retain(|rx| rx.try_recv().is_err());
+                    if self.pending.is_empty() {
+                        break;
+                    }
+                    self.frame();
+                }
+                self.settle();
+                json!({"ok": true})
             } else if let Some(m) = s.get("queued").and_then(Value::as_str) {
                 let (v, frames) = self.call_queued(m, s.get("params").cloned().unwrap_or(json!({})));
                 let min = s.get("min_frames").and_then(Value::as_u64).unwrap_or(0);

@@ -329,6 +329,20 @@ impl Writer<'_> {
             Shape::Text(t) => self.text(t),
             Shape::Mesh(m) => self.mesh(m),
             Shape::Callback(cb) => self.callback(cb.rect),
+            // A plot band (egui 0.37): the area between its lower and upper boundaries, as one
+            // closed polygon, the lower edge forwards and the upper edge back.
+            Shape::Band(b) => {
+                let Some(first) = b.points.first() else { return };
+                let mut d = format!("M{} {}", fmt(first.x), fmt(first.y.min));
+                for q in b.points.iter().skip(1) {
+                    let _ = write!(d, " L{} {}", fmt(q.x), fmt(q.y.min));
+                }
+                for q in b.points.iter().rev() {
+                    let _ = write!(d, " L{} {}", fmt(q.x), fmt(q.y.max));
+                }
+                d.push_str(" Z");
+                let _ = writeln!(self.out, "<path d=\"{d}\" {}{}/>", self.fill(b.fill), self.stroke(b.stroke.width, b.stroke.color));
+            }
         }
     }
 
@@ -650,7 +664,7 @@ pub(crate) fn export_live(app: &mut SolveApp, ctx: &egui::Context, path: Option<
     let viewport_rect = layers.iter().flat_map(|(_, s)| s.iter()).find_map(|s| if let Shape::Callback(cb) = &s.shape { Some(cb.rect) } else { None });
     let viewport = viewport_rect.and_then(|r| {
         let (w, h) = (((r.width() * ppp).round() as u32).clamp(16, 8192), ((r.height() * ppp).round() as u32).clamp(16, 8192));
-        let scene = crate::control::view_scene(app, crate::control::window_guides(app));
+        let scene = crate::control::view_scene(app, crate::control::window_guides(app)).ok()?;
         solidcraft_engine::capture::png(&scene, &app.cam, w, h).ok().map(|png| (r, png.bytes))
     });
 

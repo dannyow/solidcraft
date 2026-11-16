@@ -190,7 +190,7 @@ fn keys(p: &Value, k: &str, cmd: &str) -> Result<Vec<String>> {
     let v = v.ok_or_else(|| bad(cmd, format!("`{k}` must be a list of item keys")))?;
     // Past the 256-character cap only the datum keys go through, each bounded by its own parser:
     // an item's `o:<ids>/origin/<item>`, a folder's `o:<ids>/origin` - deep placements need them.
-    let past_cap = |x: &String| x.len() > 256 && crate::origins::item(x).is_none() && crate::origins::folder_path(x).is_none();
+    let past_cap = |x: &String| x.chars().count() > 256 && crate::origins::item(x).is_none() && crate::origins::folder_path(x).is_none();
     if v.len() > 10_000 || v.iter().any(|x| x.is_empty() || past_cap(x)) {
         return Err(bad(cmd, format!("`{k}` has bad keys")));
     }
@@ -216,7 +216,7 @@ fn entries(p: &Value, k: &str, cmd: &str) -> Result<Vec<BrowserEntry>> {
         _ => None,
     };
     let list = list.ok_or_else(|| bad(cmd, format!("`{k}` must be a list of item keys (strings) and group ids (numbers)")))?;
-    if list.len() > 10_000 || list.iter().any(|e| e.as_item().is_some_and(|k| k.is_empty() || k.len() > 256)) {
+    if list.len() > 10_000 || list.iter().any(|e| e.as_item().is_some_and(|k| k.is_empty() || k.chars().count() > 256)) {
         return Err(bad(cmd, format!("`{k}` has bad keys")));
     }
     Ok(list)
@@ -1390,7 +1390,7 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let name = new_name(cmd, p)?;
     let targets = numbered_names(s, &olds, name);
-    if let Some(target) = targets.iter().find(|t| t.len() > MAX_BODY_NAME) {
+    if let Some(target) = targets.iter().find(|t| t.chars().count() > MAX_BODY_NAME) {
         return Err(bad(cmd, format!("`{target}` is longer than {MAX_BODY_NAME} characters; choose a shorter name")));
     }
     // Each rename reads the model (a feature's other bodies, the bodies named after this one),
@@ -3586,5 +3586,30 @@ mod tests {
             let error = s.execute(command, &params).unwrap_err().to_string();
             assert!(error.contains("1…128 characters"), "{command}: {error}");
         }
+        // Several bodies with one name count characters too, the numbered ones included.
+        run(&mut s, "solid.box", json!({"body_name": "Other", "length": 5, "width": 5, "height": 5, "corner": [20, 0, 0]}));
+        run(&mut s, "body.rename", json!({"bodies": [long, "Other"], "name": long}));
+        let numbered = format!("{long} (2)");
+        assert_eq!(names(&s), vec![long.clone(), numbered]);
+    }
+
+    /// An item key is at most 256 characters, not 256 bytes, so a body with any name the rename
+    /// commands take can be grouped, ordered and hidden by it: a hundred CJK characters are 300
+    /// bytes.
+    #[test]
+    fn a_body_with_a_long_multibyte_name_can_be_grouped_ordered_and_hidden() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"body_name": "Block", "length": 10, "width": 10, "height": 10}));
+        let long = "中".repeat(100);
+        run(&mut s, "body.rename", json!({"body": "Block", "name": long}));
+        let group = run(&mut s, "browser.group", json!({"folder": "bodies", "items": [long]}))["group"].as_u64().unwrap();
+        assert_eq!(s.doc.browser_group(group).map(|g| g.items.clone()), Some(vec![BrowserEntry::Item(long.clone())]));
+        run(&mut s, "browser.ungroup", json!({"group": group}));
+        run(&mut s, "browser.order", json!({"folder": "bodies", "order": [long]}));
+        run(&mut s, "browser.visibility", json!({"items": [long], "visible": false}));
+        assert!(s.visibility.hidden_bodies.contains(&long), "{:?}", s.visibility);
+        let too_long = "中".repeat(257);
+        let error = s.execute("browser.order", &json!({"folder": "bodies", "order": [too_long]})).unwrap_err().to_string();
+        assert!(error.contains("bad keys"), "{error}");
     }
 }

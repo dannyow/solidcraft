@@ -545,11 +545,11 @@ impl ReflectionOptions {
         }
         for (index, body) in self.bodies.iter().enumerate() {
             if body.body.is_empty()
-                || body.body.len() > 128
-                || body.body.capacity() > 128
+                || body.body.len() > 512
+                || body.body.capacity() > 512
                 || self.bodies.iter().take(index).any(|other| other.body == body.body)
             {
-                return Err(JobError::new(ErrorCode::InvalidRequest, "reflection body names must be unique, nonempty and bounded to128 bytes"));
+                return Err(JobError::new(ErrorCode::InvalidRequest, "reflection body names must be unique, nonempty and bounded to 512 bytes"));
             }
         }
         Ok(())
@@ -685,10 +685,10 @@ fn bounded_emission_body<'de, D: serde::Deserializer<'de>>(d: D) -> std::result:
     impl<'de> serde::de::Visitor<'de> for Name {
         type Value = String;
         fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a nonempty captured body name of at most 256 bytes")
+            f.write_str("a nonempty captured body name of at most 512 bytes")
         }
         fn visit_str<E: serde::de::Error>(self, value: &str) -> std::result::Result<String, E> {
-            if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+            if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
                 return Err(E::custom("invalid surface emission body name"));
             }
             let mut name = String::new();
@@ -703,8 +703,8 @@ fn bounded_emission_body<'de, D: serde::Deserializer<'de>>(d: D) -> std::result:
 impl SurfaceEmission {
     pub fn validate(&self) -> Result<()> {
         if self.body.is_empty()
-            || self.body.len() > 256
-            || self.body.capacity() > 256
+            || self.body.len() > 512
+            || self.body.capacity() > 512
             || self.body.chars().any(char::is_control)
             || !self.color.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
             || !self.strength.is_finite()

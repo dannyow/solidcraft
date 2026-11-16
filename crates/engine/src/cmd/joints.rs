@@ -2199,6 +2199,11 @@ pub(super) fn edit_joint(s: &mut Session, p: &Value, plain: bool) -> Result<Valu
         Some(v) => Some(value(s, v, true, cmd)?),
         None => None,
     };
+    // A new name is refused before anything changes, as the other renames refuse it.
+    let name = match str_(p, "name").map(str::trim) {
+        Some(n) if n.is_empty() || n.chars().count() > 128 => return Err(bad(cmd, "`name` must be 1…128 characters")),
+        n => n.map(str::to_string),
+    };
     // The sides, read as joint.create reads them; a side left out keeps its place.
     let a = p.get("a").map(|v| origin_param(s, Some(v), cmd)).transpose()?;
     let b = p.get("b").map(|v| origin_param(s, Some(v), cmd)).transpose()?;
@@ -2256,8 +2261,8 @@ pub(super) fn edit_joint(s: &mut Session, p: &Value, plain: bool) -> Result<Valu
     if let Some(f) = bool_(p, "flip") {
         j.flip = f;
     }
-    if let Some(n) = str_(p, "name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= 128) {
-        j.name = n.to_string();
+    if let Some(n) = name {
+        j.name = n;
     }
     if let Some(x) = bool_(p, "suppressed") {
         suppress_joints(s.doc_mut(), &[id], x);

@@ -2324,10 +2324,7 @@ pub(crate) fn commit_rename(app: &mut SolveApp, r: &Rename) -> Result<(), String
             let name = if taken(&name) { solidcraft_engine::doc::copy_name(&name, taken) } else { name };
             app.run("component.rename", json!({ "component": c, "name": name })).map(|_| ())
         }
-        RenameWhat::Group(g) => {
-            crate::browser::group_action(app, "ui.renameGroup", &json!({ "group": g, "name": name }));
-            Ok(())
-        }
+        RenameWhat::Group(g) => app.run("browser.rename_group", json!({ "group": g, "name": name })).map(|_| ()),
         RenameWhat::TimelineGroup(g) => app.run("timeline.rename_group", json!({ "group": g, "name": name })).map(|_| ()),
         RenameWhat::Canvas(c) => app.run("canvas.edit", json!({ "canvas": c, "name": name })).map(|_| ()),
         RenameWhat::View(v) => app.run("view.rename", json!({ "view": v, "name": name })).map(|_| ()),
@@ -3014,6 +3011,8 @@ pub fn finish_rename(app: &mut SolveApp, text: Option<&str>, commit: bool) -> Re
         r.text = s.to_string();
     }
     if commit && let Err(e) = commit_rename(app, &r) {
+        // The box takes the keyboard again with the name selected, as after a refused Enter.
+        r.focused = false;
         app.menu.rename = Some(r);
         return Err(e);
     }

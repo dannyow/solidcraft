@@ -78,9 +78,9 @@ pub struct EditJointParams {
     /// Suppress the joint (true) or bring it back (false).
     #[serde(default, deserialize_with = "present")]
     pub suppressed: Option<bool>,
-    /// The joint's new name.
+    /// The joint's new name, 1 to 128 characters once surrounding spaces are cut.
     #[serde(default, deserialize_with = "present")]
-    pub name: Option<String>,
+    pub name: Option<super::edit::NewName>,
     /// Leave out the degrees of freedom and the fixed occurrences in the reply.
     #[serde(default, deserialize_with = "present")]
     pub quiet: Option<bool>,

@@ -806,9 +806,6 @@ pub fn group_action(app: &mut SolveApp, action: &str, p: &Value) {
                 let _ = app.run("browser.ungroup", json!({ "group": g }));
             }
         }
-        "ui.renameGroup" => {
-            let _ = app.run("browser.rename_group", p.clone());
-        }
         _ => {}
     }
 }

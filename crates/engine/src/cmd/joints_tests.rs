@@ -542,6 +542,24 @@ fn omitted_sides_stay() {
     assert!(after.flip && after.name == "Flipped");
 }
 
+/// A joint's new name is 1…128 characters, as the other renames count it: a hundred `ł` (200
+/// bytes) is taken; 129 characters or a blank name are refused with the reason and change
+/// nothing, not dropped while the rest of the edit goes through.
+#[test]
+fn joint_names_count_characters_and_a_bad_one_is_refused() {
+    let mut s = two_cubes();
+    run(&mut s, "joint.create", json!({"type": "rigid", "name": "Stack", "a": {"face": [5, 5, 10]}, "b": {"face": [25, 5, 0]}}));
+    let long = "ł".repeat(100);
+    run(&mut s, "joint.edit", json!({"joint": "Stack", "name": long}));
+    assert_eq!(s.doc.assembly.joints[0].name, long);
+    for name in ["ł".repeat(129), " ".to_string()] {
+        let doc = s.doc.clone();
+        let error = s.execute("joint.edit", &json!({"joint": long, "flip": true, "name": name})).unwrap_err().to_string();
+        assert!(error.contains("1…128 characters"), "{error}");
+        assert_eq!(s.doc, doc, "a refused name changes nothing");
+    }
+}
+
 /// One undo step puts the sides back, and the parts with them.
 #[test]
 fn one_undo_restores_the_old_sides() {

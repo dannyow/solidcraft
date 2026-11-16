@@ -699,7 +699,7 @@ pub(crate) fn export_live(app: &mut SolveApp, ctx: &egui::Context, path: Option<
         commit: crate::help::COMMIT.to_string(),
         theme: theme_file.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
         dark: app.ui.dark,
-        language: crate::i18n::language().to_string(),
+        language: solidcraft_ui_text::language().to_string(),
         ui_scale: app.preferences.ui_scale,
         pixels_per_point: ppp,
         window: ctx.content_rect().size(),

@@ -67,6 +67,8 @@ struct Tape {
     out: PathBuf,
     frames: Vec<Value>,
     error: Option<String>,
+    /// The last whole frame, uncropped (what a window screenshot would hold).
+    last: Option<image::RgbaImage>,
 }
 
 /// An eased move of the part of the picture the clip shows.
@@ -281,6 +283,7 @@ impl Recorder {
             h.on_frame = Some(Box::new(move |ctx, full| {
                 let mut tape = t.borrow_mut();
                 let Some(img) = painter.frame(ctx, full, tape.recording) else { return };
+                tape.last = Some(img.clone());
                 let img = match tape.crop {
                     Some(c) => {
                         let ppp = full.pixels_per_point;
@@ -376,6 +379,13 @@ impl Recorder {
         let frames = |d: usize| s.get("frames").and_then(Value::as_u64).map_or(d, |n| n.clamp(1, 600) as usize);
         if let Some(on) = s.get("record").and_then(Value::as_bool) {
             self.tape.borrow_mut().recording = on;
+        } else if s.get("deliver_shot").is_some() {
+            // The desktop app answers a report's request for a window screenshot; offscreen
+            // nothing does, so the script hands over the frame just painted.
+            let img = self.tape.borrow().last.clone().ok_or("deliver_shot: no frame painted yet (record first)")?;
+            let token = crate::issue_report::pending_token(&self.h.app).ok_or("deliver_shot: no report waits for a screenshot")?;
+            let shot = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+            crate::issue_report::receive(&mut self.h.app, token, std::sync::Arc::new(shot));
         } else if let Some(c) = s.get("crop") {
             let n = |i: usize| c.get(i).and_then(Value::as_f64).map(|v| v as f32);
             self.tape.borrow_mut().crop = match (n(0), n(1), n(2), n(3)) {

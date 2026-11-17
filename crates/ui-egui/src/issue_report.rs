@@ -956,6 +956,11 @@ pub(crate) fn tick(app: &mut SolveApp, ctx: &egui::Context) {
     }
 }
 
+/// The token of the window screenshot the report waits for (the recorder hands it a frame).
+pub(crate) fn pending_token(app: &SolveApp) -> Option<u64> {
+    app.issue_report.pending.as_ref().map(|p| p.token)
+}
+
 pub(crate) fn receive(app: &mut SolveApp, token: u64, image: Arc<ColorImage>) {
     let Some(max_side) = app.issue_report.pending.as_ref().filter(|p| p.token == token).map(|p| p.max_side) else {
         return;

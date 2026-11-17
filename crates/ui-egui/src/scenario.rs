@@ -227,6 +227,18 @@ impl Harness {
             Some(Box::new(move |name, _| Box::pin(std::future::ready(Some(dir.join(name).to_string_lossy().into_owned())))));
         let next = self.next_file.clone();
         self.app.services.pick_open = Some(Box::new(move |_| Box::pin(std::future::ready(next.borrow_mut().take()))));
+        // Recorder only: features the desktop app shows only when it has these services.
+        // SOLIDCRAFT_RECORD_FOLDER: a folder picker (the document browser needs one to exist),
+        // answering with that folder, or with nothing when the value is empty.
+        if let Ok(folder) = std::env::var("SOLIDCRAFT_RECORD_FOLDER") {
+            let folder = (!folder.is_empty()).then_some(folder);
+            self.app.services.pick_folder = Some(Box::new(move || Box::pin(std::future::ready(folder.clone()))));
+        }
+        // SOLIDCRAFT_RECORD_TICKETS: a ticket service that drops every request, so the "Report
+        // a problem" form can be shown and nothing can ever be sent.
+        if std::env::var_os("SOLIDCRAFT_RECORD_TICKETS").is_some() {
+            self.app.services.tickets_http = Some(std::sync::Arc::new(|_request, _reply| {}));
+        }
     }
 
     /// Autosave into the scenario's recovery folder (as the desktop app does into the user's).

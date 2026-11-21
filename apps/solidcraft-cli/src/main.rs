@@ -203,7 +203,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     if let Err(e) = plugins_dir(&mut args) {
-        eprintln!("error: {e}");
+        solidcraft_engine::note!("error: {e}");
         return ExitCode::FAILURE;
     }
     // Compiled plugins are kept in the per-user cache folder, as the desktop app keeps them.
@@ -722,7 +722,7 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         // written, but not silently.
         if !args.iter().any(|a| a == "--quiet") {
             for w in reply.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
-                eprintln!("{out}: warning: {w}");
+                solidcraft_engine::note!("{out}: warning: {w}");
             }
         }
     }

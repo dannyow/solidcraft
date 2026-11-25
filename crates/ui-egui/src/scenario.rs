@@ -232,7 +232,7 @@ impl Harness {
         // answering with that folder, or with nothing when the value is empty.
         if let Ok(folder) = std::env::var("SOLIDCRAFT_RECORD_FOLDER") {
             let folder = (!folder.is_empty()).then_some(folder);
-            self.app.services.pick_folder = Some(Box::new(move || Box::pin(std::future::ready(folder.clone()))));
+            self.app.services.pick_folder = Some(Box::new(move |_| Box::pin(std::future::ready(folder.clone()))));
         }
         // SOLIDCRAFT_RECORD_TICKETS: a ticket service that drops every request, so the "Report
         // a problem" form can be shown and nothing can ever be sent.

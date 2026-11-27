@@ -74,8 +74,10 @@ pub(crate) fn outside_count(outside: &Value) -> usize {
 }
 
 /// The status once an export is written to `path`, with `reply` what the command answered: where it
-/// is, and how many objects lie outside the sheet when any do. The file is written either way.
+/// is ([`crate::display_user_path`]), and how many objects lie outside the sheet when any do. The
+/// file is written either way.
 pub(crate) fn saved_status(path: &str, reply: &Value) -> String {
+    let path = crate::display_user_path(path);
     match outside_count(&reply["outside_sheet"]) {
         0 => solidcraft_ui_text::format("ui.saved_to", &[("path", path)]),
         1 => solidcraft_ui_text::format("ui.drawing_export.saved_outside_one", &[("path", path)]),
@@ -240,7 +242,8 @@ pub(super) mod tests {
         assert!(said.contains(&path) && said.contains(&count.to_string()), "{said}");
     }
 
-    /// An object listed twice is counted once, and a reply without the list counts none.
+    /// An object listed twice is counted once, and a reply without the list counts none. The status
+    /// shows a browser download's path as `display_user_path` does.
     #[test]
     fn objects_outside_the_sheet_are_counted_once_each() {
         let view = json!({"kind": "outside_sheet", "sheet": "s", "object": {"kind": "view", "id": "a"}, "why": "outside its drawing space"});
@@ -250,6 +253,8 @@ pub(super) mod tests {
         assert_eq!(outside_count(&reply["outside_sheet"]), 2);
         assert_eq!(outside_count(&json!({"path": "view.dxf"})["outside_sheet"]), 0, "a reply without the list");
         assert_eq!(outside_count(&json!([])), 0);
+        let shown = solidcraft_ui_text::format("ui.drawing_export.saved_outside_other", &[("path", "Sheet 1.pdf"), ("count", "2")]);
+        assert_eq!(saved_status("/downloads/Sheet 1.pdf", &reply), shown);
     }
 
     /// The parameters each choice gives `drawing.export`.
